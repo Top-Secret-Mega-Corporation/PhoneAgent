@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+websockets
+twilio
+motor
+google-generativeai
+elevenlabs
+python-dotenv
