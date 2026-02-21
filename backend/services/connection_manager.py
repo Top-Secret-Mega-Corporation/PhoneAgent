@@ -6,8 +6,9 @@ class ConnectionManager:
     def __init__(self):
         self.ui_websockets: list[WebSocket] = []
         self.twilio_websockets: dict[str, WebSocket] = {}
-        # current active twilio streamsid (assuming one active call for simplicity)
-        self.current_stream_sid = None
+        # current active twilio streamsid and callsid (assuming one active call for simplicity)
+        self.current_stream_sid: str | None = None
+        self.current_call_sid: str | None = None
 
     async def connect_ui(self, websocket: WebSocket):
         await websocket.accept()
@@ -19,10 +20,11 @@ class ConnectionManager:
             self.ui_websockets.remove(websocket)
             print("UI WebSocket disconnected")
 
-    async def connect_twilio(self, websocket: WebSocket, stream_sid: str):
+    async def connect_twilio(self, websocket: WebSocket, stream_sid: str, call_sid: str):
         self.twilio_websockets[stream_sid] = websocket
         self.current_stream_sid = stream_sid
-        print(f"Twilio WebSocket connected: {stream_sid}")
+        self.current_call_sid = call_sid
+        print(f"Twilio WebSocket connected: {stream_sid} for call: {call_sid}")
         # Notify UI that call started
         await self.broadcast_ui({"type": "status", "status": "call_started"})
 
@@ -32,6 +34,7 @@ class ConnectionManager:
             print(f"Twilio WebSocket disconnected: {stream_sid}")
         if self.current_stream_sid == stream_sid:
             self.current_stream_sid = None
+            self.current_call_sid = None
         # Notify UI that call ended if no active calls
         asyncio.create_task(self.broadcast_ui({"type": "status", "status": "call_ended"}))
 

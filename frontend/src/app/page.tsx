@@ -5,7 +5,7 @@ import { Mic, Search, Settings, Phone, MessageSquare, Play, RefreshCw, Accessibi
 
 type Message = {
   id: number;
-  sender: 'bot' | 'caller';
+  sender: 'bot' | 'caller' | 'user';
   text: string;
   timestamp: string;
 };
@@ -22,6 +22,15 @@ export default function Home() {
   const [partialTranscript, setPartialTranscript] = useState('');
   const [inputText, setInputText] = useState('');
   const ws = useRef<WebSocket | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [transcript, partialTranscript, isBotPreparing]);
 
   useEffect(() => {
     // Attempt to connect to local FastAPI websocket for UI interaction
@@ -37,7 +46,7 @@ export default function Home() {
         const data = JSON.parse(event.data);
         if (data.type === 'transcript') {
           setTranscript(prev => [...prev, {
-            id: Date.now(),
+            id: Date.now() + Math.random(),
             sender: data.sender,
             text: data.text,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -80,7 +89,13 @@ export default function Home() {
 
   const toggleCall = async () => {
     if (callActive) {
-      // In a real scenario, this might hit an API to end the outbound call via Twilio
+      try {
+        await fetch(`https://ambroise-skimpy-condescendingly.ngrok-free.dev/hangup`, {
+          method: "POST"
+        });
+      } catch (err) {
+        console.error("Hangup fetch failed", err);
+      }
       setCallActive(false);
     } else {
       if (!phoneNumber) return;
@@ -115,6 +130,13 @@ export default function Home() {
           </h1>
           <p className="text-sm text-neutral-400">Manage your AI proxy calls in real-time.</p>
         </div>
+
+        <button
+          onClick={() => { setTranscript([]); setPartialTranscript(''); }}
+          className="flex items-center gap-2 justify-center py-2 px-4 border border-neutral-700 hover:bg-neutral-800 rounded-xl transition-colors text-sm font-medium text-neutral-300"
+        >
+          <RefreshCw className="w-4 h-4" /> Clear Transcript
+        </button>
 
         <div className="space-y-4">
           <h2 className="text-sm font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
@@ -202,54 +224,60 @@ export default function Home() {
           </div>
         )}
 
-        <div className="flex-1 p-8 overflow-y-auto pt-24 pb-32 flex flex-col justify-end">
-          <div className="space-y-6">
-            {transcript.length === 0 && !isBotPreparing && (
-              <div className="text-center text-neutral-600 flex flex-col items-center justify-center h-full gap-4 mt-32">
-                <RefreshCw className="w-8 h-8 opacity-20" />
-                <p>No messages yet. Start a call or type below.</p>
-              </div>
-            )}
-
-            {transcript.map((msg) => (
-              <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[70%] p-4 shadow-xl ${msg.sender === 'bot'
-                  ? 'bg-blue-600/20 border border-blue-500/30 text-blue-50 rounded-2xl rounded-tr-sm'
-                  : 'bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm'
-                  }`}>
-                  <p className="text-[15px] leading-relaxed">{msg.text}</p>
-                  <span className="text-[11px] text-neutral-500 mt-2 block font-medium uppercase tracking-wider">{msg.sender} • {msg.timestamp}</span>
+        <div className="flex-1 p-8 overflow-y-auto pt-24 pb-32 flex flex-col">
+          <div className="flex-1 flex flex-col justify-end min-h-full">
+            <div className="space-y-6 flex-shrink-0">
+              {transcript.length === 0 && !isBotPreparing && !partialTranscript && (
+                <div className="text-center text-neutral-600 flex flex-col items-center justify-center h-full gap-4 mt-32">
+                  <RefreshCw className="w-8 h-8 opacity-20" />
+                  <p>No messages yet. Start a call or type below.</p>
                 </div>
-              </div>
-            ))}
+              )}
 
-            {partialTranscript && (
-              <div className="flex justify-start opacity-70">
-                <div className="max-w-[70%] p-4 shadow-xl bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm border-dashed">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="flex h-2 w-2 relative">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-neutral-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-neutral-500"></span>
-                    </span>
-                    <span className="text-[11px] text-neutral-400 uppercase tracking-wider font-medium">Listening...</span>
+              {transcript.map((msg) => {
+                const isRight = msg.sender === 'bot' || msg.sender === 'user';
+                return (
+                  <div key={msg.id} className={`flex ${isRight ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[70%] p-4 shadow-xl ${isRight
+                      ? 'bg-blue-600/20 border border-blue-500/30 text-blue-50 rounded-2xl rounded-tr-sm'
+                      : 'bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm'
+                      }`}>
+                      <p className="text-[15px] leading-relaxed">{msg.text}</p>
+                      <span className="text-[11px] text-neutral-500 mt-2 block font-medium uppercase tracking-wider">{msg.sender} • {msg.timestamp}</span>
+                    </div>
                   </div>
-                  <p className="text-[15px] leading-relaxed animate-pulse">{partialTranscript}</p>
-                </div>
-              </div>
-            )}
+                );
+              })}
 
-            {isBotPreparing && (
-              <div className="flex justify-end opacity-70">
-                <div className="bg-neutral-900 border border-neutral-800 text-neutral-400 text-sm px-4 py-3 rounded-2xl rounded-tr-sm flex items-center gap-3 shadow-lg">
-                  <div className="flex gap-1.5">
-                    <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                    <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                    <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce"></span>
+              {partialTranscript && (
+                <div className="flex justify-start opacity-70">
+                  <div className="max-w-[70%] p-4 shadow-xl bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm border-dashed">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-neutral-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-neutral-500"></span>
+                      </span>
+                      <span className="text-[11px] text-neutral-400 uppercase tracking-wider font-medium">Listening...</span>
+                    </div>
+                    <p className="text-[15px] leading-relaxed animate-pulse">{partialTranscript}</p>
                   </div>
-                  Bot is preparing to speak...
                 </div>
-              </div>
-            )}
+              )}
+
+              {isBotPreparing && (
+                <div className="flex justify-end opacity-70">
+                  <div className="bg-neutral-900 border border-neutral-800 text-neutral-400 text-sm px-4 py-3 rounded-2xl rounded-tr-sm flex items-center gap-3 shadow-lg">
+                    <div className="flex gap-1.5">
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce"></span>
+                    </div>
+                    Bot is preparing to speak...
+                  </div>
+                </div>
+              )}
+              <div ref={bottomRef} className="h-4 w-full" />
+            </div>
           </div>
         </div>
 

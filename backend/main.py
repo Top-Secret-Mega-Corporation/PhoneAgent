@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, Request, Response, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from backend.database.mongo import db
-from backend.services.twilio_service import generate_twiml, initiate_outbound_call
+from backend.services.twilio_service import generate_twiml, initiate_outbound_call, twilio_client
 from backend.services.connection_manager import manager
 from backend.services.elevenlabs_service import ElevenLabsService
 
@@ -38,7 +38,20 @@ async def shutdown_db_client():
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "PhoneAgent Backend is running!"}
+    return {"message": "Hello from PhoneAgent FastAPI Backend!"}
+
+@app.post("/hangup")
+async def end_active_call():
+    """Allows UI to manually end the active Twilio call."""
+    if manager.current_call_sid and twilio_client:
+        try:
+            twilio_client.calls(manager.current_call_sid).update(status="completed")
+            print(f">>> HANGUP trigger sent for {manager.current_call_sid}")
+            return {"status": "success", "call_sid": manager.current_call_sid}
+        except Exception as e:
+            print(f">>> HANGUP Failed: {e}")
+            return {"status": "error", "reason": str(e)}
+    return {"status": "no_active_call"}
 
 def get_base_url(request: Request):
     try:
@@ -92,15 +105,19 @@ async def ui_stream(websocket: WebSocket):
 
             print(f">>> UI action={action} text={text!r}", flush=True)
 
-            await manager.broadcast_ui({"type": "transcript", "sender": "caller", "text": f"[You]: {text}"})
+            if action == "agent_prompt":
+                await manager.broadcast_ui({"type": "transcript", "sender": "user", "text": text})
+            elif action == "direct_tts":
+                # Show immediately as bot
+                await manager.broadcast_ui({"type": "transcript", "sender": "bot", "text": text})
 
-            if manager.current_stream_sid:
-                await db.db["transcripts"].insert_one({
-                    "call_id": manager.current_stream_sid,
-                    "sender": "caller",
-                    "text": f"[You]: {text}",
-                    "timestamp": datetime.utcnow()
-                })
+                if manager.current_stream_sid:
+                    await db.db["transcripts"].insert_one({
+                        "call_id": manager.current_stream_sid,
+                        "sender": "bot",
+                        "text": text,
+                        "timestamp": datetime.utcnow()
+                    })
 
             global current_generation_task
             if current_generation_task and not current_generation_task.done():
@@ -113,7 +130,7 @@ async def ui_stream(websocket: WebSocket):
                 async def direct_tts_flow():
                     try:
                         await manager.broadcast_ui({"type": "status", "status": "bot_preparing"})
-                        await process_and_stream_audio(text)
+                        await process_and_stream_audio(text, broadcast_transcript=False)
                     except asyncio.CancelledError:
                         print(">>> direct_tts_flow cancelled", flush=True)
 
@@ -124,7 +141,7 @@ async def ui_stream(websocket: WebSocket):
         manager.disconnect_ui(websocket)
 
 
-async def process_and_stream_audio(text: str):
+async def process_and_stream_audio(text: str, broadcast_transcript: bool = True):
     """Takes a text string, streams TTS audio to Twilio."""
     audio_queue = asyncio.Queue()
 
@@ -154,13 +171,14 @@ async def process_and_stream_audio(text: str):
     await twilio_sender
 
     print(f">>> TTS complete for: {text!r}", flush=True)
-    await manager.broadcast_ui({"type": "transcript", "sender": "bot", "text": text})
-    await db.db["transcripts"].insert_one({
-        "call_id": stream_sid,
-        "sender": "bot",
-        "text": text,
-        "timestamp": datetime.utcnow()
-    })
+    if broadcast_transcript:
+        await manager.broadcast_ui({"type": "transcript", "sender": "bot", "text": text})
+        await db.db["transcripts"].insert_one({
+            "call_id": stream_sid,
+            "sender": "bot",
+            "text": text,
+            "timestamp": datetime.utcnow()
+        })
 
 
 @app.websocket("/media-stream")
@@ -195,8 +213,9 @@ async def media_stream(websocket: WebSocket):
 
             elif event == "start":
                 stream_sid = msg["start"]["streamSid"]
-                print(f">>> STREAM STARTED sid={stream_sid}", flush=True)
-                await manager.connect_twilio(websocket, stream_sid)
+                call_sid = msg["start"]["callSid"]
+                print(f">>> STREAM STARTED sid={stream_sid} call_sid={call_sid}", flush=True)
+                await manager.connect_twilio(websocket, stream_sid, call_sid)
 
                 await db.db["calls"].insert_one({
                     "call_id": stream_sid,
