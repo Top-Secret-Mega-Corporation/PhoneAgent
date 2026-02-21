@@ -16,7 +16,7 @@ type DevStatus = 'idle' | 'connecting' | 'listening' | 'agent_speaking';
 export default function Home() {
   // ── Shared state ──────────────────────────────────────────────────
   const [appMode, setAppMode] = useState<AppMode>('twilio');
-  const [mode, setMode] = useState<'tts' | 'agent'>('tts');
+  const [mode, setMode] = useState<'agent' | 'tts' | 'standard'>('agent');
   const [transcript, setTranscript] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const ws = useRef<WebSocket | null>(null);
@@ -187,7 +187,8 @@ export default function Home() {
       devWs.current.send(JSON.stringify({ type: 'inject', text }));
       addMessage('caller', `[Director]: ${text}`);
     } else if (appMode === 'twilio' && callActive && ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ action: mode === 'tts' ? 'direct_tts' : 'agent_prompt', text }));
+      const actionMap = { tts: 'direct_tts', agent: 'agent_prompt', standard: 'standard' } as const;
+      ws.current.send(JSON.stringify({ action: actionMap[mode], text }));
     }
   };
 
@@ -204,107 +205,6 @@ export default function Home() {
 
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100 font-sans">
-      {/* ── Sidebar ── */}
-      <div className="w-80 border-r border-neutral-800 bg-neutral-900/50 p-6 flex flex-col gap-6">
-
-        {/* Header */}
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-white mb-1 flex items-center gap-2">
-            <Mic className="text-blue-500" /> Voice Surrogate
-          </h1>
-          <p className="text-sm text-neutral-400">Manage your AI proxy calls in real-time.</p>
-        </div>
-
-        {/* Mode toggle */}
-        <div className="space-y-2">
-          <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
-            <Settings className="w-3 h-3" /> Mode
-          </h2>
-          <div className="grid grid-cols-2 gap-2 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
-            <button
-              onClick={() => setAppMode('twilio')}
-              disabled={devActive}
-              className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${appMode === 'twilio' ? 'bg-white text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed'}`}
-            >
-              📞 Twilio
-            </button>
-            <button
-              onClick={() => setAppMode('dev')}
-              disabled={callActive}
-              className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${appMode === 'dev' ? 'bg-amber-500 text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed'}`}
-            >
-              ⚡ Dev Mode
-            </button>
-          </div>
-          {appMode === 'dev' && (
-            <p className="text-xs text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-              Your mic = simulated caller. The agent handles the call autonomously. Type to give the agent director instructions.
-            </p>
-          )}
-        </div>
-
-        {/* Twilio voice mode */}
-        {appMode === 'twilio' && (
-          <div className="space-y-3">
-            <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
-              <Settings className="w-3 h-3" /> Voice Mode
-            </h2>
-            <div className="grid grid-cols-2 gap-2 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
-              <button onClick={() => setMode('tts')} className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${mode === 'tts' ? 'bg-white text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}>Direct TTS</button>
-              <button onClick={() => setMode('agent')} className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${mode === 'agent' ? 'bg-blue-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}>Agent Mode</button>
-            </div>
-            <p className="text-xs text-neutral-500">
-              {mode === 'tts' ? 'AI speaks exactly what you type.' : 'Type prompts; AI generates responses.'}
-            </p>
-          </div>
-        )}
-
-        {/* Controls */}
-        <div className="mt-auto space-y-3">
-          {appMode === 'twilio' ? (
-            <>
-              {!callActive && (
-                <input type="tel" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)}
-                  placeholder="+1234567890"
-                  className="w-full bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-500 rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                />
-              )}
-              <button onClick={toggleCall} disabled={(!callActive && !phoneNumber) || isDialing}
-                className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${callActive ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20' : isDialing ? 'bg-blue-600/50 text-white cursor-wait' : !phoneNumber ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed' : 'bg-white text-black hover:bg-neutral-200'}`}>
-                {isDialing ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Phone className="w-5 h-5" />}
-                {isDialing ? 'Dialing...' : callActive ? 'End Call' : 'Call Number'}
-              </button>
-            </>
-          ) : (
-            <>
-              {devActive && (
-                <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${devStatus === 'agent_speaking' ? 'bg-blue-500/10 border-blue-500/30 text-blue-300' : 'bg-green-500/10 border-green-500/30 text-green-300'}`}>
-                  <span>{devStatusLabel[devStatus]}</span>
-                  <span className="relative flex h-2 w-2">
-                    <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${devStatus === 'agent_speaking' ? 'bg-blue-400' : 'bg-green-400'}`}></span>
-                    <span className={`relative inline-flex rounded-full h-2 w-2 ${devStatus === 'agent_speaking' ? 'bg-blue-500' : 'bg-green-500'}`}></span>
-                  </span>
-                </div>
-              )}
-              {devActive && (
-                <button onClick={() => { setIsMuted(m => !m); }}
-                  className={`w-full py-2 rounded-xl flex items-center justify-center gap-2 text-sm font-medium border transition-all ${isMuted ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'}`}>
-                  {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                  {isMuted ? 'Unmute Mic' : 'Mute Mic'}
-                </button>
-              )}
-              <button
-                onClick={devActive ? endDevSession : startDevSession}
-                disabled={devStatus === 'connecting'}
-                className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${devActive ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20' : devStatus === 'connecting' ? 'bg-amber-500/30 text-amber-300 cursor-wait' : 'bg-amber-500 text-black hover:bg-amber-400'}`}>
-                {devStatus === 'connecting' ? <RefreshCw className="w-5 h-5 animate-spin" /> : devActive ? <PhoneOff className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
-                {devStatus === 'connecting' ? 'Connecting...' : devActive ? 'End Dev Session' : 'Start Dev Session'}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
       {/* ── Main content ── */}
       <div className="flex-1 flex flex-col relative">
         {/* Live banner */}
@@ -354,7 +254,9 @@ export default function Home() {
                 !canType
                   ? appMode === 'dev' ? 'Start a dev session first...' : 'Start a call to begin typing...'
                   : appMode === 'dev' ? 'Give the agent instructions (e.g. "Ask for their name")'
-                    : mode === 'tts' ? 'Type to speak immediately...' : 'Prompt the AI to respond...'
+                    : mode === 'tts' ? 'Type to speak immediately (interrupts ongoing speech)...'
+                    : mode === 'agent' ? 'Prompt the AI to respond...'
+                    : 'Standard mode — speak with your own voice'
               }
               className={`w-full bg-neutral-900 border ${canType ? 'border-neutral-700 focus:border-blue-500 focus:ring-blue-500/50' : 'border-neutral-800 opacity-50 cursor-not-allowed'} text-white placeholder-neutral-500 rounded-2xl py-4 pl-6 pr-16 focus:outline-none focus:ring-2 transition-all shadow-2xl`}
             />
@@ -363,12 +265,138 @@ export default function Home() {
               <MessageSquare className="w-4 h-4" />
             </button>
           </form>
-          <div className="max-w-4xl mx-auto mt-3 flex justify-end px-2">
+          <div className="max-w-4xl mx-auto mt-3 flex justify-between items-center px-2">
+            <span className="text-[11px] text-neutral-500">
+              {mode === 'tts' && inputText.length > 0 && "Submitting this will explicitly interrupt any ongoing bot speech."}
+              {mode === 'standard' && "Your microphone audio passes through directly — no AI processing."}
+            </span>
             <span className="text-[11px] text-neutral-500 flex items-center gap-1">
-              Press <kbd className="bg-neutral-800 px-1.5 py-0.5 rounded font-mono mx-1 border border-neutral-700">Enter</kbd>
-              to {appMode === 'dev' ? 'instruct agent' : mode === 'tts' ? 'speak' : 'generate'}
+              {mode !== 'standard' && <>Press <kbd className="bg-neutral-800 px-1.5 py-0.5 rounded font-mono mx-1 border border-neutral-700">Enter</kbd>
+              to {appMode === 'dev' ? 'instruct agent' : mode === 'tts' ? 'speak' : 'generate'}</>}
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* ── Sidebar (right side) ── */}
+      <div className="w-80 border-l border-neutral-800 bg-neutral-900/50 p-6 flex flex-col gap-6">
+
+        {/* Header */}
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-white mb-1 flex items-center gap-2">
+            <Mic className="text-blue-500" /> Voice Surrogate
+          </h1>
+          <p className="text-sm text-neutral-400">Manage your AI proxy calls in real-time.</p>
+        </div>
+
+        {/* App mode toggle (Twilio / Dev) */}
+        <div className="space-y-2">
+          <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
+            <Settings className="w-3 h-3" /> Mode
+          </h2>
+          <div className="grid grid-cols-2 gap-2 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
+            <button
+              onClick={() => setAppMode('twilio')}
+              disabled={devActive}
+              className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${appMode === 'twilio' ? 'bg-white text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed'}`}
+            >
+              📞 Twilio
+            </button>
+            <button
+              onClick={() => setAppMode('dev')}
+              disabled={callActive}
+              className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${appMode === 'dev' ? 'bg-amber-500 text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed'}`}
+            >
+              ⚡ Dev Mode
+            </button>
+          </div>
+          {appMode === 'dev' && (
+            <p className="text-xs text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+              Your mic = simulated caller. The agent handles the call autonomously. Type to give the agent director instructions.
+            </p>
+          )}
+        </div>
+
+        {/* Operating Mode (Agent / Direct TTS / Standard) — Twilio only */}
+        {appMode === 'twilio' && (
+          <div className="space-y-3">
+            <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
+              <Settings className="w-3 h-3" /> Operating Mode
+            </h2>
+            <div className="flex gap-4">
+              {/* Description on the left */}
+              <div className="flex-1 flex items-center">
+                <p className="text-xs text-neutral-500 leading-relaxed">
+                  {mode === 'agent'
+                    ? "Act as a director. Type prompts mid-call, and the AI generates full conversational responses."
+                    : mode === 'tts'
+                      ? "The AI speaks exactly what you type. Includes real-time spellcheck."
+                      : "Speak with your own voice directly on the call. No AI voice processing."}
+                </p>
+              </div>
+              {/* Vertical toggle on the right */}
+              <div className="flex flex-col gap-2 bg-neutral-900 p-1.5 rounded-xl border border-neutral-800">
+                {([
+                  { key: 'agent' as const, label: 'Agent', color: 'bg-blue-600 text-white' },
+                  { key: 'tts' as const, label: 'Direct TTS', color: 'bg-white text-black' },
+                  { key: 'standard' as const, label: 'Standard', color: 'bg-emerald-600 text-white' },
+                ]).map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setMode(opt.key)}
+                    className={`py-2 px-4 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${mode === opt.key ? `${opt.color} shadow-sm` : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div className="mt-auto space-y-3">
+          {appMode === 'twilio' ? (
+            <>
+              {!callActive && (
+                <input type="tel" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)}
+                  placeholder="+1234567890"
+                  className="w-full bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-500 rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              )}
+              <button onClick={toggleCall} disabled={(!callActive && !phoneNumber) || isDialing}
+                className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${callActive ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20' : isDialing ? 'bg-blue-600/50 text-white cursor-wait' : !phoneNumber ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed' : 'bg-white text-black hover:bg-neutral-200'}`}>
+                {isDialing ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Phone className="w-5 h-5" />}
+                {isDialing ? 'Dialing...' : callActive ? 'End Call' : 'Call Number'}
+              </button>
+            </>
+          ) : (
+            <>
+              {devActive && (
+                <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${devStatus === 'agent_speaking' ? 'bg-blue-500/10 border-blue-500/30 text-blue-300' : 'bg-green-500/10 border-green-500/30 text-green-300'}`}>
+                  <span>{devStatusLabel[devStatus]}</span>
+                  <span className="relative flex h-2 w-2">
+                    <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${devStatus === 'agent_speaking' ? 'bg-blue-400' : 'bg-green-400'}`}></span>
+                    <span className={`relative inline-flex rounded-full h-2 w-2 ${devStatus === 'agent_speaking' ? 'bg-blue-500' : 'bg-green-500'}`}></span>
+                  </span>
+                </div>
+              )}
+              {devActive && (
+                <button onClick={() => { setIsMuted(m => !m); }}
+                  className={`w-full py-2 rounded-xl flex items-center justify-center gap-2 text-sm font-medium border transition-all ${isMuted ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'}`}>
+                  {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  {isMuted ? 'Unmute Mic' : 'Mute Mic'}
+                </button>
+              )}
+              <button
+                onClick={devActive ? endDevSession : startDevSession}
+                disabled={devStatus === 'connecting'}
+                className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${devActive ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20' : devStatus === 'connecting' ? 'bg-amber-500/30 text-amber-300 cursor-wait' : 'bg-amber-500 text-black hover:bg-amber-400'}`}>
+                {devStatus === 'connecting' ? <RefreshCw className="w-5 h-5 animate-spin" /> : devActive ? <PhoneOff className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
+                {devStatus === 'connecting' ? 'Connecting...' : devActive ? 'End Dev Session' : 'Start Dev Session'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

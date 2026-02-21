@@ -248,6 +248,15 @@ async def ui_stream(websocket: WebSocket):
                     "text": f"[Director prompt]: {text}"
                 })
 
+            elif action == "standard":
+                # Standard mode – caller uses their own voice, no AI processing.
+                # Nothing to inject; just acknowledge in the UI transcript.
+                await manager.broadcast_ui({
+                    "type": "transcript",
+                    "sender": "caller",
+                    "text": f"[Standard mode]: {text}"
+                })
+
             else:
                 await manager.broadcast_ui({
                     "type": "transcript",
