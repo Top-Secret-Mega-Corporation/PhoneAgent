@@ -96,7 +96,7 @@ class ElevenLabsService:
             await output_queue.put(None)
 
     async def stt_stream_analyzer(self, input_queue: asyncio.Queue, callback):
-        uri = "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime"
+        uri = "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&audio_format=ulaw_8000&language_code=en"
         logger.debug("STT connecting to: %s", uri)
 
         try:
@@ -105,14 +105,6 @@ class ElevenLabsService:
                 additional_headers={"xi-api-key": ELEVENLABS_API_KEY}
             ) as websocket:
                 logger.info("STT WebSocket connected")
-
-                # Send config as the very first message
-                await websocket.send(json.dumps({
-                    "message_type": "session_config",
-                    "audio_format": "ulaw_8000",   # matches Twilio's mulaw 8kHz
-                    "language_code": "en",
-                }))
-                logger.debug("STT config message sent")
 
                 async def send_audio():
                     chunks_sent = 0

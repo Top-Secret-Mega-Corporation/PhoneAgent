@@ -181,6 +181,8 @@ async def media_stream(websocket: WebSocket):
                 "text": text,
                 "timestamp": datetime.utcnow()
             })
+        elif text.strip() and not is_final:
+            await manager.broadcast_ui({"type": "partial_transcript", "sender": "caller", "text": text})
 
     try:
         while True:

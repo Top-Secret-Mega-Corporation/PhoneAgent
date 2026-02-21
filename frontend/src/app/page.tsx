@@ -19,6 +19,7 @@ export default function Home() {
   const [accessibilityMode, setAccessibilityMode] = useState(false);
   const [audioStreamActive, setAudioStreamActive] = useState(false);
   const [transcript, setTranscript] = useState<Message[]>([]);
+  const [partialTranscript, setPartialTranscript] = useState('');
   const [inputText, setInputText] = useState('');
   const ws = useRef<WebSocket | null>(null);
 
@@ -41,7 +42,10 @@ export default function Home() {
             text: data.text,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           }]);
+          setPartialTranscript(''); // Clear the partial transcript
           setIsBotPreparing(false);
+        } else if (data.type === 'partial_transcript') {
+          setPartialTranscript(data.text);
         } else if (data.type === 'status') {
           if (data.status === 'call_started') {
             setCallActive(true);
@@ -218,6 +222,21 @@ export default function Home() {
                 </div>
               </div>
             ))}
+
+            {partialTranscript && (
+              <div className="flex justify-start opacity-70">
+                <div className="max-w-[70%] p-4 shadow-xl bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm border-dashed">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-neutral-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-neutral-500"></span>
+                    </span>
+                    <span className="text-[11px] text-neutral-400 uppercase tracking-wider font-medium">Listening...</span>
+                  </div>
+                  <p className="text-[15px] leading-relaxed animate-pulse">{partialTranscript}</p>
+                </div>
+              </div>
+            )}
 
             {isBotPreparing && (
               <div className="flex justify-end opacity-70">
