@@ -1,6 +1,5 @@
 import os
 import json
-import base64
 import asyncio
 import websockets
 from dotenv import load_dotenv
@@ -8,82 +7,162 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_8101kj0w0x2bfywt0ewvxypb4kqp")  # Default: Spark
 
-# Default voice: Rachel
-DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+CONVAI_WS_URL = "wss://api.elevenlabs.io/v1/convai/conversation"
+
 
 class ElevenLabsService:
-    def __init__(self, voice_id: str = DEFAULT_VOICE_ID):
-        self.voice_id = voice_id
+    """
+    Bridges a Twilio media stream WebSocket <-> ElevenLabs Conversational AI Agent.
 
-    async def tts_stream_generator(self, text_iterator, output_queue: asyncio.Queue):
+    Audio flow:
+      Twilio (mulaw 8000Hz) -> ElevenLabs Agent -> Twilio (mulaw 8000Hz)
+
+    The ElevenLabs ConvAI WS accepts audio in the same mulaw_8000 format
+    Twilio uses, so no audio transcoding is needed.
+    """
+
+    def __init__(self, agent_id: str = None):
+        self.agent_id = agent_id or ELEVENLABS_AGENT_ID
+        self._ws = None
+        self._audio_callback = None  # Called with (base64_audio_str) when agent speaks
+        self._status_callback = None  # Called with (status_dict) on status events
+        self._receive_task = None
+
+    async def start_session(self, audio_callback, status_callback=None):
         """
-        Connects to ElevenLabs TTS WebSocket, sends text from `text_iterator`, 
-        and puts returned audio chunks (base64 ulaw) into `output_queue`.
+        Opens the ElevenLabs ConvAI WebSocket and begins the session.
+        'audio_callback' is an async fn(base64_audio: str) called with agent audio chunks.
+        'status_callback' is an async fn(event: dict) for status/transcript events.
         """
-        uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}/stream-input?model_id=eleven_monolingual_v1&output_format=ulaw_8000"
-        
+        self._audio_callback = audio_callback
+        self._status_callback = status_callback
+
+        url = f"{CONVAI_WS_URL}?agent_id={self.agent_id}"
+
+        headers = {
+            "xi-api-key": ELEVENLABS_API_KEY
+        }
+
         try:
-            async with websockets.connect(uri) as websocket:
-                # Initialization with first message containing API key
-                init_msg = {
-                    "text": " ",
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
-                    "xi_api_key": ELEVENLABS_API_KEY,
+            self._ws = await websockets.connect(url, additional_headers=headers)
+            print(f"[ElevenLabs] Connected to agent {self.agent_id}")
+
+            # Send conversation initiation config:
+            # Tell ElevenLabs to output mulaw_8000 (same as Twilio uses)
+            init_msg = {
+                "type": "conversation_initiation_client_data",
+                "conversation_config_override": {
+                    "agent": {},
+                    "tts": {
+                        "output_format": "ulaw_8000"
+                    }
                 }
-                await websocket.send(json.dumps(init_msg))
+            }
+            await self._ws.send(json.dumps(init_msg))
 
-                async def send_text():
-                    async for text_chunk in text_iterator:
-                        # Append a space to ensure the model groups words naturally
-                        msg = {"text": text_chunk + " "}
-                        await websocket.send(json.dumps(msg))
-                        await asyncio.sleep(0.01)
-                    
-                    # Empty text message signifies the end of the text stream
-                    await websocket.send(json.dumps({"text": ""}))
-
-                async def receive_audio():
-                    while True:
-                        try:
-                            response = await websocket.recv()
-                            data = json.loads(response)
-                            if data.get("audio"):
-                                # Put base64 audio chunk in queue to be sent to Twilio
-                                await output_queue.put(data["audio"])
-                            if data.get("isFinal"):
-                                # Put None to signify end of stream
-                                await output_queue.put(None)
-                                break
-                        except websockets.exceptions.ConnectionClosed:
-                            break
-
-                await asyncio.gather(send_text(), receive_audio())
+            # Start background receive loop
+            self._receive_task = asyncio.create_task(self._receive_loop())
         except Exception as e:
-            print(f"ElevenLabs TTS WebSocket error: {e}")
-            await output_queue.put(None)
+            print(f"[ElevenLabs] Failed to connect: {e}")
+            raise
 
-    async def stt_stream_analyzer(self, input_queue: asyncio.Queue, callback):
-        """
-        Connects to ElevenLabs STT WebSocket to transcribe Twilio streamed audio.
-        Yields transcribed text via `callback(text, is_final)`.
-        """
-        # Note: ElevenLabs Realtime STT requires a dedicated STT WS endpoint. 
-        # Using a mock loop below to consume the queue and prevent memory leaks.
-        # In a full production env, you would route via wss://api.elevenlabs.io/v1/speech-to-text
-        print("STT analysis task started for incoming stream.")
+    async def _receive_loop(self):
+        """Listens for messages from ElevenLabs agent and dispatches callbacks."""
         try:
-            while True:
-                audio = await input_queue.get()
-                if audio is None:
-                    break
-                
-                # Mock sending audio to WS: await ws.send(json.dumps({"user_audio_chunk": audio}))
-                # Mock receiving text back from WS:
-                # response = await ws.recv()
-                # await callback(response.text, response.isFinal)
-                
-        except asyncio.CancelledError:
-            pass
+            async for raw_message in self._ws:
+                try:
+                    msg = json.loads(raw_message)
+                    msg_type = msg.get("type")
+
+                    if msg_type == "audio":
+                        # Agent is speaking — forward audio to Twilio
+                        audio_event = msg.get("audio_event", {})
+                        b64_audio = audio_event.get("audio_base_64")
+                        if b64_audio and self._audio_callback:
+                            await self._audio_callback(b64_audio)
+
+                    elif msg_type == "agent_response":
+                        # Agent generated a text response (transcript)
+                        agent_response = msg.get("agent_response_event", {})
+                        text = agent_response.get("agent_response", "")
+                        if text and self._status_callback:
+                            await self._status_callback({
+                                "type": "transcript",
+                                "sender": "bot",
+                                "text": text
+                            })
+
+                    elif msg_type == "user_transcript":
+                        # Caller's speech was transcribed
+                        transcript = msg.get("user_transcription_event", {})
+                        text = transcript.get("user_transcript", "")
+                        if text and self._status_callback:
+                            await self._status_callback({
+                                "type": "transcript",
+                                "sender": "caller",
+                                "text": text
+                            })
+
+                    elif msg_type == "interruption":
+                        # Agent was interrupted
+                        if self._status_callback:
+                            await self._status_callback({"type": "status", "status": "interrupted"})
+
+                    elif msg_type == "ping":
+                        # Respond to keepalive pings
+                        pong = {"type": "pong", "event_id": msg.get("ping_event", {}).get("event_id")}
+                        await self._ws.send(json.dumps(pong))
+
+                except json.JSONDecodeError:
+                    pass
+                except Exception as e:
+                    print(f"[ElevenLabs] Error handling message: {e}")
+
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"[ElevenLabs] Connection closed: {e}")
         except Exception as e:
-            print(f"STT error: {e}")
+            print(f"[ElevenLabs] Receive loop error: {e}")
+
+    async def send_audio(self, base64_audio: str):
+        """
+        Forward a chunk of Twilio mulaw_8000 audio (base64) to the ElevenLabs agent.
+        """
+        if self._ws and self._ws.open:
+            msg = {
+                "user_audio_chunk": base64_audio
+            }
+            try:
+                await self._ws.send(json.dumps(msg))
+            except Exception as e:
+                print(f"[ElevenLabs] Error sending audio: {e}")
+
+    async def inject_text(self, text: str):
+        """
+        Inject text directly into the agent conversation.
+        Used when the user types in 'Direct TTS' mode to make the agent speak it.
+        """
+        if self._ws and self._ws.open:
+            msg = {
+                "type": "user_message",
+                "user_message_event": {
+                    "user_message": text
+                }
+            }
+            try:
+                await self._ws.send(json.dumps(msg))
+            except Exception as e:
+                print(f"[ElevenLabs] Error injecting text: {e}")
+
+    async def end_session(self):
+        """Close the ElevenLabs agent session."""
+        if self._receive_task:
+            self._receive_task.cancel()
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+        self._ws = None
+        print("[ElevenLabs] Session ended")
