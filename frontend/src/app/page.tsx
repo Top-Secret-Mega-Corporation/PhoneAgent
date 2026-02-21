@@ -26,7 +26,7 @@ export default function Home() {
     // Attempt to connect to local FastAPI websocket for UI interaction
     if (typeof window !== 'undefined') {
       // Connect to the UI management websocket using ngrok URL
-      ws.current = new WebSocket('wss://beverlee-unlikable-unglamourously.ngrok-free.dev/ui-stream');
+      ws.current = new WebSocket('wss://ambroise-skimpy-condescendingly.ngrok-free.dev/ui-stream');
 
       ws.current.onopen = () => {
         console.log('Connected to backend UI stream');
@@ -82,7 +82,7 @@ export default function Home() {
       if (!phoneNumber) return;
       setIsDialing(true);
       try {
-        const res = await fetch(`https://beverlee-unlikable-unglamourously.ngrok-free.dev/call`, {
+        const res = await fetch(`https://ambroise-skimpy-condescendingly.ngrok-free.dev/call`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
