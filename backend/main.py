@@ -72,6 +72,25 @@ async def make_call(call_req: CallRequest, request: Request):
     except Exception as e:
         return Response(content=str(e), status_code=500)
 
+@app.get("/dev-session")
+async def get_dev_session():
+    """
+    Returns a signed ElevenLabs WebSocket URL for browser-direct dev mode.
+    The frontend uses this to connect to the agent without exposing the API key.
+    """
+    import urllib.request as _req
+    import os
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    agent_id = os.getenv("ELEVENLABS_AGENT_ID", "agent_8101kj0w0x2bfywt0ewvxypb4kqp")
+    url = f"https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id={agent_id}"
+    try:
+        request = _req.Request(url, headers={"xi-api-key": api_key})
+        with _req.urlopen(request, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            return {"signed_url": data["signed_url"]}
+    except Exception as e:
+        return Response(content=f"Failed to get signed URL: {e}", status_code=500)
+
 # ── Active ElevenLabs agent sessions, keyed by stream_sid ────────────────────
 
 active_sessions: dict[str, ElevenLabsService] = {}
