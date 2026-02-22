@@ -36,7 +36,8 @@ export default function Home() {
   const [mode, setMode] = useState<'tts' /* | 'agent' */>('tts');
   const [callActive, setCallActive] = useState(false);
   const [isDialing, setIsDialing] = useState(false);
-  const [phoneNumber, setPhoneNumber] = useState('+1');
+  const [countryCode, setCountryCode] = useState('+1');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [isBotPreparing, setIsBotPreparing] = useState(false);
   const [accessibilityMode, setAccessibilityMode] = useState(false);
   const [audioStreamActive, setAudioStreamActive] = useState(false);
@@ -63,7 +64,7 @@ export default function Home() {
     if (transcript.length === 0) return;
     const text = transcript.map(m => {
       const isRight = m.sender === 'bot' || m.sender === 'user';
-      const senderLabel = isRight ? 'YOU' : (m.sender === 'caller' ? phoneNumber : m.sender.toUpperCase());
+      const senderLabel = isRight ? 'YOU' : (m.sender === 'caller' ? `${countryCode}${phoneNumber}` : m.sender.toUpperCase());
       return `[${m.timestamp}] ${senderLabel}: ${m.text}`;
     }).join('\n');
     const blob = new Blob([text], { type: 'text/plain' });
@@ -190,7 +191,7 @@ export default function Home() {
             "Content-Type": "application/json",
             "ngrok-skip-browser-warning": "true"
           },
-          body: JSON.stringify({ to_number: phoneNumber })
+          body: JSON.stringify({ to_number: `${countryCode}${phoneNumber}` })
         });
         if (!res.ok) {
           console.error("Failed to initiate call");
@@ -209,13 +210,25 @@ export default function Home() {
       <div className="flex fixed z-50 top-0 w-full md:hidden items-center justify-center gap-3 px-4 py-3 bg-neutral-800/50 rounded-b-md">
         {/* Phone number input */}
         {!callActive && (
-          <input
-            type="tel"
-            value={phoneNumber}
-            onChange={e => setPhoneNumber(e.target.value.replace(/[^+\d]/g, ''))}
-            placeholder="+1234567890"
-            className="flex-1 w-2xl min-w-0 bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-500 rounded-xl py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-          />
+          <div className="flex-1 w-2xl min-w-0 flex items-center bg-neutral-900 border border-neutral-700 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-blue-500/50">
+            <select
+              value={countryCode}
+              onChange={e => setCountryCode(e.target.value)}
+              className="bg-transparent text-white border-r border-neutral-700 py-2 pl-3 pr-2 text-sm focus:outline-none appearance-none font-medium cursor-pointer hover:bg-neutral-800 transition-colors"
+            >
+              <option value="+1">🇺🇸 +1</option>
+              <option value="+44">🇬🇧 +44</option>
+              <option value="+61">🇦🇺 +61</option>
+              {/* Add more as needed */}
+            </select>
+            <input
+              type="tel"
+              value={phoneNumber}
+              onChange={e => setPhoneNumber(e.target.value.replace(/[^\d]/g, ''))}
+              placeholder="1234567890"
+              className="flex-1 w-full bg-transparent text-white placeholder-neutral-500 py-2 px-3 text-sm focus:outline-none"
+            />
+          </div>
         )}
         {callActive && (
           <span className="flex-1 text-sm text-emerald-400 font-medium flex items-center gap-2">
@@ -320,20 +333,32 @@ export default function Home() {
 
         <div className="space-y-4 mt-auto">
           {!callActive && (
-            <input
-              type="tel"
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value.replace(/[^+\d]/g, ''))}
-              placeholder="+1234567890"
-              className="w-full bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-500 rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-            />
+            <div className="flex items-center w-full bg-neutral-900 border border-neutral-700 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-blue-500/50">
+              <select
+                value={countryCode}
+                onChange={e => setCountryCode(e.target.value)}
+                className="bg-transparent text-white border-r border-neutral-700 py-3 pl-4 pr-3 text-base focus:outline-none appearance-none font-medium cursor-pointer hover:bg-neutral-800 transition-colors"
+              >
+                <option value="+1">🇺🇸 +1</option>
+                <option value="+44">🇬🇧 +44</option>
+                <option value="+61">🇦🇺 +61</option>
+                {/* Add more as needed */}
+              </select>
+              <input
+                type="tel"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value.replace(/[^\d]/g, ''))}
+                placeholder="1234567890"
+                className="flex-1 w-full bg-transparent text-white placeholder-neutral-500 py-3 px-4 focus:outline-none"
+              />
+            </div>
           )}
           <button
             onClick={toggleCall}
             disabled={(!callActive && !phoneNumber) || isDialing}
-            className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${callActive
+            className={`w-full py-4 disabled:opacity-50 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${callActive
               ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/20'
-              : (isDialing ? 'bg-blue-600/50 text-white cursor-wait' : (!phoneNumber ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed' : 'bg-blue-600/50 text-white hover:bg-blue-500'))
+              : (isDialing ? 'bg-blue-600/50 text-white cursor-wait' : (!phoneNumber ? 'bg-blue-600/50 cursor-not-allowed' : 'bg-blue-600/50 text-white hover:bg-blue-600'))
               }`}
           >
             {isDialing ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Phone className="w-5 h-5" />}
@@ -391,7 +416,7 @@ export default function Home() {
 
               {transcript.map((msg) => {
                 const isRight = msg.sender === 'bot' || msg.sender === 'user';
-                const senderLabel = isRight ? 'YOU' : (msg.sender === 'caller' ? phoneNumber : msg.sender.toUpperCase());
+                const senderLabel = isRight ? 'YOU' : (msg.sender === 'caller' ? `${countryCode}${phoneNumber}` : msg.sender.toUpperCase());
                 return (
                   <div key={msg.id} className={`flex ${isRight ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[70%] p-4 shadow-xl ${isRight
