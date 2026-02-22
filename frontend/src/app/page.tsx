@@ -41,9 +41,9 @@ export default function Home() {
       const defaultWsBase = isSecure ? `wss://${window.location.host}` : `ws://${window.location.host}`;
 
       // Use env variable if provided, fallback to relative path on same host
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-        ? `wss://phone-agent-api.lucaswebber.dev/ui-stream`
-        : (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `${defaultWsBase}/ui-stream`);
+      const wsUrl = `wss://phone-agent-api.lucaswebber.dev/ui-stream`
+        // ? process.env.NEXT_PUBLIC_WS_URL
+        // : (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `${defaultWsBase}/ui-stream`);
 
       ws.current = new WebSocket(wsUrl);
 
@@ -97,7 +97,8 @@ export default function Home() {
   };
 
   const toggleCall = async () => {
-    const apiUrl = "https://phone-agent-api.lucaswebber.dev" || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
+    const apiUrl = "https://phone-agent-api.lucaswebber.dev" 
+    // || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
     console.log(apiUrl);
 
     if (callActive) {
