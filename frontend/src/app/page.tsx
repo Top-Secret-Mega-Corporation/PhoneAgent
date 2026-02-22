@@ -5,7 +5,7 @@ import { Mic, Settings, Phone, MessageSquare, RefreshCw, MicOff, Zap, PhoneOff }
 
 type Message = {
   id: number;
-  sender: 'bot' | 'caller';
+  sender: 'bot' | 'caller' | 'user';
   text: string;
   timestamp: string;
 };
@@ -18,8 +18,21 @@ export default function Home() {
   const [appMode, setAppMode] = useState<AppMode>('twilio');
   const [mode, setMode] = useState<'agent' | 'tts' | 'standard'>('agent');
   const [transcript, setTranscript] = useState<Message[]>([]);
+  const [partialTranscript, setPartialTranscript] = useState('');
   const [inputText, setInputText] = useState('');
   const ws = useRef<WebSocket | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      scrollToBottom();
+    }, 100);
+    return () => clearTimeout(timeout);
+  }, [transcript, partialTranscript, isBotPreparing]);
 
   // ── Twilio state ───────────────────────────────────────────────────
   const [callActive, setCallActive] = useState(false);
@@ -45,79 +58,42 @@ export default function Home() {
 
   // ── Backend UI WebSocket (Twilio mode UI updates) ─────────────────
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    ws.current = new WebSocket('ws://localhost:8000/ui-stream');
-    ws.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'transcript') addMessage(data.sender, data.text);
-      else if (data.type === 'status') {
-        if (data.status === 'call_started') { setCallActive(true); setIsDialing(false); }
-        if (data.status === 'call_ended') { setCallActive(false); setIsDialing(false); }
-      }
-    };
-    return () => ws.current?.close();
-  }, [addMessage]);
+    if (typeof window !== 'undefined') {
+      const isSecure = window.location.protocol === 'https:';
+      const defaultWsBase = isSecure ? `wss://${window.location.host}` : `ws://${window.location.host}`;
 
-  // ── Twilio handlers ────────────────────────────────────────────────
-  const toggleCall = async () => {
-    if (callActive) { setCallActive(false); return; }
-    if (!phoneNumber) return;
-    setIsDialing(true);
-    try {
-      const res = await fetch('http://localhost:8000/call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to_number: phoneNumber })
-      });
-      if (!res.ok) { setIsDialing(false); }
-    } catch { setIsDialing(false); }
-  };
+      // Use env variable if provided, fallback to relative path on same host
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL
+        ? `${process.env.NEXT_PUBLIC_WS_URL}/ui-stream`
+        : (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `${defaultWsBase}/ui-stream`);
 
-  // ── Dev mode handlers ──────────────────────────────────────────────
+      ws.current = new WebSocket(wsUrl);
 
-  /** Play PCM16 16kHz audio received from the backend (ElevenLabs agent output) */
-  const playPcm16 = useCallback((pcmBytes: ArrayBuffer) => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    const samples = new Int16Array(pcmBytes);
-    const float32 = new Float32Array(samples.length);
-    for (let i = 0; i < samples.length; i++) {
-      float32[i] = samples[i] / 32768;
-    }
-    const buffer = ctx.createBuffer(1, float32.length, 16000);
-    buffer.copyToChannel(float32, 0);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    source.start();
-  }, []);
+      ws.current.onopen = () => {
+        console.log(`Connected to backend UI stream at ${wsUrl}`);
+      };
 
-  const startDevSession = async () => {
-    setDevStatus('connecting');
-    setTranscript([]);
-
-    try {
-      // Set up AudioContext for playback
-      audioCtxRef.current = new AudioContext({ sampleRate: 48000 });
-
-      // Request microphone
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      micStreamRef.current = stream;
-
-      // Open WebSocket to backend dev-stream bridge
-      const socket = new WebSocket('ws://localhost:8000/dev-stream');
-      devWs.current = socket;
-
-      socket.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'status') {
-            if (msg.status === 'connected') setDevStatus('listening');
-          } else if (msg.type === 'transcript') {
-            addMessage(msg.sender, msg.text);
-          } else if (msg.type === 'error') {
-            addMessage('bot', `❌ Error: ${msg.message}`);
-            endDevSession();
+      ws.current.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'transcript') {
+          setTranscript(prev => [...prev, {
+            id: Date.now() + Math.random(),
+            sender: data.sender,
+            text: data.text,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }]);
+          setPartialTranscript(''); // Clear the partial transcript
+          setIsBotPreparing(false);
+        } else if (data.type === 'partial_transcript') {
+          setPartialTranscript(data.text);
+        } else if (data.type === 'status') {
+          if (data.status === 'call_started') {
+            setCallActive(true);
+            setIsDialing(false);
+          }
+          if (data.status === 'call_ended') {
+            setCallActive(false);
+            setIsDialing(false);
           }
         } else if (event.data instanceof Blob) {
           // Agent audio: PCM16 16kHz binary
@@ -182,19 +158,83 @@ export default function Home() {
     const text = inputText.trim();
     setInputText('');
 
-    if (appMode === 'dev' && devWs.current?.readyState === WebSocket.OPEN) {
-      // Send director instruction to backend → forwarded to ElevenLabs agent
-      devWs.current.send(JSON.stringify({ type: 'inject', text }));
-      addMessage('caller', `[Director]: ${text}`);
-    } else if (appMode === 'twilio' && callActive && ws.current?.readyState === WebSocket.OPEN) {
-      const actionMap = { tts: 'direct_tts', agent: 'agent_prompt', standard: 'standard' } as const;
-      ws.current.send(JSON.stringify({ action: actionMap[mode], text }));
+  const toggleCall = async () => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
+
+    if (callActive) {
+      try {
+        await fetch(`${apiUrl}/hangup`, {
+          method: "POST"
+        });
+      } catch (err) {
+        console.error("Hangup fetch failed", err);
+      }
+      setCallActive(false);
+    } else {
+      if (!phoneNumber) return;
+      setIsDialing(true);
+      try {
+        const res = await fetch(`${apiUrl}/call`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "true"
+          },
+          body: JSON.stringify({ to_number: phoneNumber })
+        });
+        if (!res.ok) {
+          console.error("Failed to initiate call");
+          setIsDialing(false);
+        }
+      } catch (err) {
+        console.error("Error making call", err);
+        setIsDialing(false);
+      }
     }
   };
 
-  const devActive = devStatus !== 'idle' && devStatus !== 'connecting';
-  const isLive = appMode === 'twilio' ? callActive : devActive;
-  const canType = isLive;
+  return (
+    <div className="flex h-screen bg-neutral-950 text-neutral-100 font-sans">
+      {/* Sidebar / Settings */}
+      <div className="w-80 border-r border-neutral-800 bg-neutral-900/50 p-6 flex flex-col gap-8">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-white mb-2 flex items-center gap-2">
+            <Mic className="text-blue-500" /> Voice Surrogate
+          </h1>
+          <p className="text-sm text-neutral-400">Manage your AI proxy calls in real-time.</p>
+        </div>
+
+        <button
+          onClick={() => { setTranscript([]); setPartialTranscript(''); }}
+          className="flex items-center gap-2 justify-center py-2 px-4 border border-neutral-700 hover:bg-neutral-800 rounded-xl transition-colors text-sm font-medium text-neutral-300"
+        >
+          <RefreshCw className="w-4 h-4" /> Clear Transcript
+        </button>
+
+        <div className="space-y-4">
+          <h2 className="text-sm font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
+            <Settings className="w-4 h-4" /> Operating Mode
+          </h2>
+          <div className="grid grid-cols-2 gap-2 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
+            <button
+              onClick={() => setMode('tts')}
+              className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${mode === 'tts' ? 'bg-white text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+            >
+              Direct TTS
+            </button>
+            <button
+              onClick={() => setMode('agent')}
+              className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${mode === 'agent' ? 'bg-blue-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+            >
+              Agent Mode
+            </button>
+          </div>
+          <p className="text-xs text-neutral-500 mt-2 min-h-[40px]">
+            {mode === 'tts'
+              ? "The AI speaks exactly what you type. Includes real-time spellcheck."
+              : "Act as a director. Type prompts mid-call, and the AI generates full conversational responses."}
+          </p>
+        </div>
 
   const devStatusLabel: Record<DevStatus, string> = {
     idle: 'Idle',
@@ -220,27 +260,60 @@ export default function Home() {
           </div>
         )}
 
-        {/* Messages */}
-        <div className="flex-1 p-8 overflow-y-auto pt-24 pb-32 flex flex-col justify-end">
-          <div className="space-y-6">
-            {transcript.length === 0 && (
-              <div className="text-center text-neutral-600 flex flex-col items-center gap-4 mt-32">
-                {appMode === 'dev'
-                  ? <><Zap className="w-8 h-8 opacity-20" /><p>Click <strong>Start Dev Session</strong>.<br />Speak into your mic to simulate being a caller.<br />Type below to send the agent instructions.</p></>
-                  : <><RefreshCw className="w-8 h-8 opacity-20" /><p>No messages yet. Start a call or type below.</p></>
-                }
-              </div>
-            )}
-            {transcript.map(msg => (
-              <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[70%] p-4 shadow-xl ${msg.sender === 'bot'
-                  ? 'bg-blue-600/20 border border-blue-500/30 text-blue-50 rounded-2xl rounded-tr-sm'
-                  : 'bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm'}`}>
-                  <p className="text-[15px] leading-relaxed">{msg.text}</p>
-                  <span className="text-[11px] text-neutral-500 mt-2 block font-medium uppercase tracking-wider">{msg.sender} • {msg.timestamp}</span>
+        <div className="flex-1 p-8 overflow-y-auto pt-24 pb-32 flex flex-col relative">
+          <div className="flex-1 w-full mt-auto">
+            <div className="space-y-6">
+              {transcript.length === 0 && !isBotPreparing && !partialTranscript && (
+                <div className="text-center text-neutral-600 flex flex-col items-center justify-center h-full gap-4 mt-32">
+                  <RefreshCw className="w-8 h-8 opacity-20" />
+                  <p>No messages yet. Start a call or type below.</p>
                 </div>
-              </div>
-            ))}
+              )}
+
+              {transcript.map((msg) => {
+                const isRight = msg.sender === 'bot' || msg.sender === 'user';
+                return (
+                  <div key={msg.id} className={`flex ${isRight ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[70%] p-4 shadow-xl ${isRight
+                      ? 'bg-blue-600/20 border border-blue-500/30 text-blue-50 rounded-2xl rounded-tr-sm'
+                      : 'bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm'
+                      }`}>
+                      <p className="text-[15px] leading-relaxed">{msg.text}</p>
+                      <span className="text-[11px] text-neutral-500 mt-2 block font-medium uppercase tracking-wider">{msg.sender} • {msg.timestamp}</span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {partialTranscript && (
+                <div className="flex justify-start opacity-70">
+                  <div className="max-w-[70%] p-4 shadow-xl bg-neutral-800/80 border border-neutral-700/50 text-neutral-200 rounded-2xl rounded-tl-sm border-dashed">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-neutral-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-neutral-500"></span>
+                      </span>
+                      <span className="text-[11px] text-neutral-400 uppercase tracking-wider font-medium">Listening...</span>
+                    </div>
+                    <p className="text-[15px] leading-relaxed animate-pulse">{partialTranscript}</p>
+                  </div>
+                </div>
+              )}
+
+              {isBotPreparing && (
+                <div className="flex justify-end opacity-70">
+                  <div className="bg-neutral-900 border border-neutral-800 text-neutral-400 text-sm px-4 py-3 rounded-2xl rounded-tr-sm flex items-center gap-3 shadow-lg">
+                    <div className="flex gap-1.5">
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce"></span>
+                    </div>
+                    Bot is preparing to speak...
+                  </div>
+                </div>
+              )}
+              <div ref={bottomRef} className="h-4 w-full mt-4" />
+            </div>
           </div>
         </div>
 

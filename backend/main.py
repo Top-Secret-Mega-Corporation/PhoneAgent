@@ -6,9 +6,11 @@ from fastapi import FastAPI, WebSocket, Request, Response, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from backend.database.mongo import db
-from backend.services.twilio_service import generate_twiml, initiate_outbound_call
+from backend.services.twilio_service import generate_twiml, initiate_outbound_call, twilio_client
 from backend.services.connection_manager import manager
 from backend.services.elevenlabs_service import ElevenLabsService
+
+print(">>> SERVER STARTING UP", flush=True)
 
 app = FastAPI(title="AI Voice Surrogate")
 
@@ -20,20 +22,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Startup / Shutdown ──────────────────────────────────────────────────────
+elevenlabs = ElevenLabsService()
+
+current_generation_task = None
 
 @app.on_event("startup")
 async def startup_db_client():
     await db.connect()
+    print(">>> DB connected", flush=True)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
     await db.close()
+    print(">>> DB disconnected", flush=True)
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+@app.get("/")
+def read_root():
+    return {"message": "Hello from PhoneAgent FastAPI Backend!"}
+
+@app.post("/hangup")
+async def end_active_call():
+    """Allows UI to manually end the active Twilio call."""
+    if manager.current_call_sid and twilio_client:
+        try:
+            twilio_client.calls(manager.current_call_sid).update(status="completed")
+            print(f">>> HANGUP trigger sent for {manager.current_call_sid}")
+            return {"status": "success", "call_sid": manager.current_call_sid}
+        except Exception as e:
+            print(f">>> HANGUP Failed: {e}")
+            return {"status": "error", "reason": str(e)}
+    return {"status": "no_active_call"}
 
 def get_base_url(request: Request):
-    """Dynamically resolve ngrok public URL for Twilio webhooks."""
     try:
         req = urllib.request.Request("http://localhost:4040/api/tunnels")
         with urllib.request.urlopen(req, timeout=1) as response:
@@ -56,6 +76,7 @@ def read_root():
 async def twiml_bot(request: Request):
     base_url = get_base_url(request)
     ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://") + "/media-stream"
+    print(f">>> /twiml hit — ws_url={ws_url}", flush=True)
     twiml = generate_twiml(ws_url)
     return Response(content=twiml, media_type="text/xml")
 
@@ -66,6 +87,7 @@ class CallRequest(BaseModel):
 async def make_call(call_req: CallRequest, request: Request):
     base_url = get_base_url(request)
     webhook_url = f"{base_url}/twiml"
+    print(f">>> /call hit — to={call_req.to_number} webhook={webhook_url}", flush=True)
     try:
         call_sid = initiate_outbound_call(call_req.to_number, webhook_url)
         return {"status": "success", "call_sid": call_sid}
@@ -213,19 +235,54 @@ async def dev_stream(websocket: WebSocket):
 
 @app.websocket("/ui-stream")
 async def ui_stream(websocket: WebSocket):
+    print(">>> UI STREAM connected", flush=True)
     await manager.connect_ui(websocket)
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
             action = msg.get("action")
-            text = msg.get("text", "").strip()
+            text = msg.get("text")
 
             if not text:
                 continue
 
-            stream_sid = manager.current_stream_sid
-            session = active_sessions.get(stream_sid) if stream_sid else None
+            print(f">>> UI action={action} text={text!r}", flush=True)
+
+            if action == "agent_prompt":
+                await manager.broadcast_ui({"type": "transcript", "sender": "user", "text": text})
+            elif action == "direct_tts":
+                # Show immediately as bot
+                await manager.broadcast_ui({"type": "transcript", "sender": "bot", "text": text})
+
+                if manager.current_stream_sid:
+                    await db.db["transcripts"].insert_one({
+                        "call_id": manager.current_stream_sid,
+                        "sender": "bot",
+                        "text": text,
+                        "timestamp": datetime.utcnow()
+                    })
+
+            global current_generation_task
+            if current_generation_task and not current_generation_task.done():
+                print(">>> Cancelling existing generation task", flush=True)
+                current_generation_task.cancel()
+                if manager.current_stream_sid:
+                    await manager.clear_twilio_buffer(manager.current_stream_sid)
+
+            if action == "direct_tts":
+                async def direct_tts_flow():
+                    try:
+                        await manager.broadcast_ui({"type": "status", "status": "bot_preparing"})
+                        await process_and_stream_audio(text, broadcast_transcript=False)
+                    except asyncio.CancelledError:
+                        print(">>> direct_tts_flow cancelled", flush=True)
+
+                current_generation_task = asyncio.create_task(direct_tts_flow())
+
+    except WebSocketDisconnect:
+        print(">>> UI STREAM disconnected", flush=True)
+        manager.disconnect_ui(websocket)
 
             if action == "direct_tts" and session:
                 # Inject user text directly into the active agent session.
@@ -239,14 +296,24 @@ async def ui_stream(websocket: WebSocket):
                     "text": f"[You typed]: {text}"
                 })
 
-            elif action == "agent_prompt" and session:
-                # In agent mode, inject as a user message so the agent responds conversationally
-                await session.inject_text(text)
-                await manager.broadcast_ui({
-                    "type": "transcript",
-                    "sender": "caller",
-                    "text": f"[Director prompt]: {text}"
-                })
+async def process_and_stream_audio(text: str, broadcast_transcript: bool = True):
+    """Takes a text string, streams TTS audio to Twilio."""
+    audio_queue = asyncio.Queue()
+
+    stream_sid = manager.current_stream_sid
+    if not stream_sid:
+        print(">>> process_and_stream_audio: no stream_sid, aborting", flush=True)
+        return
+
+    async def send_audio_to_twilio_task():
+        chunk_count = 0
+        while True:
+            chunk = await audio_queue.get()
+            if chunk is None:
+                print(f">>> Twilio audio sender done — sent {chunk_count} chunks", flush=True)
+                break
+            chunk_count += 1
+            await manager.send_audio_to_twilio(stream_sid, chunk)
 
             elif action == "standard":
                 # Standard mode – caller uses their own voice, no AI processing.
@@ -257,87 +324,94 @@ async def ui_stream(websocket: WebSocket):
                     "text": f"[Standard mode]: {text}"
                 })
 
-            else:
-                await manager.broadcast_ui({
-                    "type": "transcript",
-                    "sender": "caller",
-                    "text": "[No active call to speak on]"
-                })
+    async def text_iterator():
+        yield text
 
-    except WebSocketDisconnect:
-        manager.disconnect_ui(websocket)
+    await elevenlabs.tts_stream_generator(text_iterator(), audio_queue)
+
+    await audio_queue.put(None)
+    await twilio_sender
+
+    print(f">>> TTS complete for: {text!r}", flush=True)
+    if broadcast_transcript:
+        await manager.broadcast_ui({"type": "transcript", "sender": "bot", "text": text})
+        await db.db["transcripts"].insert_one({
+            "call_id": stream_sid,
+            "sender": "bot",
+            "text": text,
+            "timestamp": datetime.utcnow()
+        })
 
 # ── Twilio Media Stream WebSocket ─────────────────────────────────────────────
 
 @app.websocket("/media-stream")
 async def media_stream(websocket: WebSocket):
-    """
-    Bridges Twilio media stream <-> ElevenLabs Conversational AI Agent.
-    
-    Audio flow:
-      Twilio caller audio (mulaw 8000) → ElevenLabs agent
-      ElevenLabs agent response audio (mulaw 8000) → Twilio → caller hears AI
-    """
+    print(">>> MEDIA STREAM HIT", flush=True)
     await websocket.accept()
     stream_sid = None
-    el_session: ElevenLabsService = None
+    stt_queue = asyncio.Queue()
+    stt_task = None
+
+    async def stt_callback(text: str, is_final: bool):
+        print(f">>> STT CALLBACK is_final={is_final} text={text!r}", flush=True)
+        if text.strip() and is_final:
+            await manager.broadcast_ui({"type": "transcript", "sender": "caller", "text": text})
+            await db.db["transcripts"].insert_one({
+                "call_id": stream_sid,
+                "sender": "caller",
+                "text": text,
+                "timestamp": datetime.utcnow()
+            })
+        elif text.strip() and not is_final:
+            await manager.broadcast_ui({"type": "partial_transcript", "sender": "caller", "text": text})
 
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
-            event = msg.get("event")
+            event = msg["event"]
 
             if event == "connected":
-                print("[Twilio] Media stream connected")
+                print(">>> Twilio connected event", flush=True)
 
             elif event == "start":
                 stream_sid = msg["start"]["streamSid"]
-                await manager.connect_twilio(websocket, stream_sid)
+                call_sid = msg["start"]["callSid"]
+                print(f">>> STREAM STARTED sid={stream_sid} call_sid={call_sid}", flush=True)
+                await manager.connect_twilio(websocket, stream_sid, call_sid)
 
-                # Log call to DB — fire-and-forget, never block the audio path
-                async def _log_call_start():
+                await db.db["calls"].insert_one({
+                    "call_id": stream_sid,
+                    "twilio_call_sid": stream_sid,
+                    "status": "in_progress",
+                    "direction": "inbound",
+                    "start_time": datetime.utcnow()
+                })
+
+                stt_task = asyncio.create_task(elevenlabs.stt_stream_analyzer(stt_queue, stt_callback))
+
+                def stt_task_done(task):
                     try:
-                        await db.db["calls"].insert_one({
-                            "call_id": stream_sid,
-                            "twilio_call_sid": stream_sid,
-                            "status": "in_progress",
-                            "direction": "outbound",
-                            "start_time": datetime.utcnow()
-                        })
-                    except Exception as db_err:
-                        print(f"[DB] Warning: could not log call start: {db_err}")
-                asyncio.create_task(_log_call_start())
+                        task.result()
+                        print(">>> STT task completed cleanly", flush=True)
+                    except Exception as e:
+                        print(f">>> STT TASK DIED: {e}", flush=True)
 
-                # Start ElevenLabs agent session
-                el_session = ElevenLabsService()
+                stt_task.add_done_callback(stt_task_done)
+                print(">>> STT task started", flush=True)
 
-                async def on_agent_audio(b64_audio: str):
-                    """Forward ElevenLabs agent audio to caller via Twilio."""
-                    await manager.send_audio_to_twilio(stream_sid, b64_audio)
+            elif event == "media":
+                payload = msg["media"]["payload"]
+                print(f">>> MEDIA CHUNK len={len(payload)}", flush=True)
+                await stt_queue.put(payload)
 
-                async def on_agent_event(event_data: dict):
-                    """Forward transcripts/status to the UI dashboard."""
-                    await manager.broadcast_ui(event_data)
-                    # Persist transcripts to DB — fire-and-forget
-                    if event_data.get("type") == "transcript":
-                        sid = stream_sid
-                        async def _log_transcript():
-                            try:
-                                await db.db["transcripts"].insert_one({
-                                    "call_id": sid,
-                                    "sender": event_data.get("sender"),
-                                    "text": event_data.get("text"),
-                                    "timestamp": datetime.utcnow()
-                                })
-                            except Exception as db_err:
-                                print(f"[DB] Warning: could not log transcript: {db_err}")
-                        asyncio.create_task(_log_transcript())
-
-                try:
-                    await el_session.start_session(
-                        audio_callback=on_agent_audio,
-                        status_callback=on_agent_event
+            elif event == "stop":
+                print(">>> STREAM STOPPED", flush=True)
+                if stream_sid:
+                    manager.disconnect_twilio(stream_sid)
+                    await db.db["calls"].update_one(
+                        {"call_id": stream_sid},
+                        {"$set": {"status": "completed", "end_time": datetime.utcnow()}}
                     )
                     active_sessions[stream_sid] = el_session
                     print(f"[ElevenLabs] Agent session started for stream {stream_sid}")
@@ -356,22 +430,8 @@ async def media_stream(websocket: WebSocket):
                 break
 
     except WebSocketDisconnect:
-        print(f"[Twilio] WebSocket disconnected: {stream_sid}")
-
-    finally:
-        # Clean up ElevenLabs session
-        if el_session:
-            await el_session.end_session()
+        print(">>> MEDIA STREAM WebSocketDisconnect", flush=True)
         if stream_sid:
             active_sessions.pop(stream_sid, None)
             manager.disconnect_twilio(stream_sid)
-            sid = stream_sid
-            async def _log_call_end():
-                try:
-                    await db.db["calls"].update_one(
-                        {"call_id": sid},
-                        {"$set": {"status": "completed", "end_time": datetime.utcnow()}}
-                    )
-                except Exception:
-                    pass
-            asyncio.create_task(_log_call_end())
+        await stt_queue.put(None)
