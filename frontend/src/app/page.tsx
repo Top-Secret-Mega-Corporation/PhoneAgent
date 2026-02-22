@@ -333,7 +333,7 @@ export default function Home() {
             disabled={(!callActive && !phoneNumber) || isDialing}
             className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${callActive
               ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/20'
-              : (isDialing ? 'bg-blue-600/50 text-white cursor-wait' : (!phoneNumber ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed' : 'bg-white text-black hover:bg-neutral-200'))
+              : (isDialing ? 'bg-blue-600/50 text-white cursor-wait' : (!phoneNumber ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed' : 'bg-blue-600/50 text-white hover:bg-blue-500'))
               }`}
           >
             {isDialing ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Phone className="w-5 h-5" />}
@@ -345,7 +345,7 @@ export default function Home() {
       {/* Main Transcript Window */}
       <div className="flex-1 flex flex-col relative mt-15 md:mt-0">
         {callActive && (
-          <div className="absolute top-0 left-0 right-0 bg-blue-600/10 border-b border-blue-500/20 text-blue-400 py-3 px-6 flex justify-between items-center z-10 backdrop-blur-md shadow-sm">
+          <div className="fixed top-15 left-0 right-0 bg-blue-600/10 border-b border-blue-500/20 text-blue-400 py-3 px-6 flex justify-between items-center z-10 backdrop-blur-md shadow-sm">
             <div className="flex items-center gap-3">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
