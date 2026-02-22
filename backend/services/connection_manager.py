@@ -71,4 +71,12 @@ class ConnectionManager:
         }
         await self.send_to_twilio(stream_sid, message)
 
+    async def broadcast_audio_to_ui(self, base64_audio: str, sender: str):
+        message = {
+            "type": "audio",
+            "sender": sender,
+            "payload": base64_audio
+        }
+        await self.broadcast_ui(message)
+
 manager = ConnectionManager()

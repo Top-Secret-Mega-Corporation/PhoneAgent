@@ -158,6 +158,7 @@ async def process_and_stream_audio(text: str, broadcast_transcript: bool = True)
                 break
             chunk_count += 1
             await manager.send_audio_to_twilio(stream_sid, chunk)
+            await manager.broadcast_audio_to_ui(chunk, "bot")
 
     twilio_sender = asyncio.create_task(send_audio_to_twilio_task())
 
@@ -240,6 +241,7 @@ async def media_stream(websocket: WebSocket):
                 payload = msg["media"]["payload"]
                 print(f">>> MEDIA CHUNK len={len(payload)}", flush=True)
                 await stt_queue.put(payload)
+                await manager.broadcast_audio_to_ui(payload, "caller")
 
             elif event == "stop":
                 print(">>> STREAM STOPPED", flush=True)

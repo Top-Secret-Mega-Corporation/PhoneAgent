@@ -1,7 +1,29 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Search, Settings, Phone, MessageSquare, Play, RefreshCw, Accessibility, Volume2, Ear } from 'lucide-react';
+import { Mic, Search, Settings, Phone, MessageSquare, Play, RefreshCw, Accessibility, Volume2, Ear, Download } from 'lucide-react';
+
+// Mu-law decoding table
+const muLawToLinear = new Int16Array(256);
+for (let i = 0; i < 256; i++) {
+  let mu = ~i;
+  let sign = (mu & 0x80) ? -1 : 1;
+  let exponent = (mu & 0x70) >> 4;
+  let mantissa = mu & 0x0f;
+  let sample = sign * (((mantissa << 3) + 132) << exponent) - 132;
+  muLawToLinear[i] = sample;
+}
+
+function decodeMuLaw(base64: string): Float32Array {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const float32Array = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const uint8 = binaryString.charCodeAt(i);
+    float32Array[i] = muLawToLinear[uint8] / 32768.0;
+  }
+  return float32Array;
+}
 
 type Message = {
   id: number;
@@ -24,6 +46,33 @@ export default function Home() {
   const ws = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
+  const audioStreamActiveRef = useRef(audioStreamActive);
+
+  useEffect(() => {
+    audioStreamActiveRef.current = audioStreamActive;
+    if (audioStreamActive && !audioContextRef.current) {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      audioContextRef.current = new AudioContextClass({ sampleRate: 8000 });
+      nextPlayTimeRef.current = audioContextRef.current.currentTime;
+    }
+  }, [audioStreamActive]);
+
+  const downloadTranscript = () => {
+    if (transcript.length === 0) return;
+    const text = transcript.map(m => `[${m.timestamp}] ${m.sender.toUpperCase()}: ${m.text}`).join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transcript-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const scrollToBottom = () => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -42,8 +91,8 @@ export default function Home() {
 
       // Use env variable if provided, fallback to relative path on same host
       const wsUrl = `wss://phone-agent-api.lucaswebber.dev/ui-stream`
-        // ? process.env.NEXT_PUBLIC_WS_URL
-        // : (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `${defaultWsBase}/ui-stream`);
+      // ? process.env.NEXT_PUBLIC_WS_URL
+      // : (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `${defaultWsBase}/ui-stream`);
 
       ws.current = new WebSocket(wsUrl);
 
@@ -64,6 +113,23 @@ export default function Home() {
           setIsBotPreparing(false);
         } else if (data.type === 'partial_transcript') {
           setPartialTranscript(data.text);
+        } else if (data.type === 'audio') {
+          if (audioStreamActiveRef.current && audioContextRef.current) {
+            const actx = audioContextRef.current;
+            const floatData = decodeMuLaw(data.payload);
+            const buffer = actx.createBuffer(1, floatData.length, 8000);
+            buffer.getChannelData(0).set(floatData);
+            const source = actx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(actx.destination);
+
+            const currentTime = actx.currentTime;
+            if (nextPlayTimeRef.current < currentTime) {
+              nextPlayTimeRef.current = currentTime + 0.02; // Small buffer for smoothness
+            }
+            source.start(nextPlayTimeRef.current);
+            nextPlayTimeRef.current += buffer.duration;
+          }
         } else if (data.type === 'status') {
           if (data.status === 'call_started') {
             setCallActive(true);
@@ -97,7 +163,7 @@ export default function Home() {
   };
 
   const toggleCall = async () => {
-    const apiUrl = "https://phone-agent-api.lucaswebber.dev" 
+    const apiUrl = "https://phone-agent-api.lucaswebber.dev"
     // || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
     console.log(apiUrl);
 
@@ -135,73 +201,93 @@ export default function Home() {
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-neutral-950 text-neutral-100 font-sans">
-      <div className="flex md:hidden items-center gap-3 px-4 py-3">
-          {/* Phone number input */}
-          {!callActive && (
-            <input
-              type="tel"
-              value={phoneNumber}
-              onChange={e => setPhoneNumber(e.target.value)}
-              placeholder="+1234567890"
-              className="flex-1 min-w-0 bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-500 rounded-xl py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-            />
-          )}
-          {callActive && (
-            <span className="flex-1 text-sm text-emerald-400 font-medium flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse inline-block" />
-              Live call
-            </span>
-          )}
+      {/* Mobile Menu */}
+      <div className="flex fixed top-0 md:hidden items-center gap-3 px-4 py-3">
+        {/* Phone number input */}
+        {!callActive && (
+          <input
+            type="tel"
+            value={phoneNumber}
+            onChange={e => setPhoneNumber(e.target.value)}
+            placeholder="+1234567890"
+            className="flex-1 min-w-0 bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-500 rounded-xl py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+          />
+        )}
+        {callActive && (
+          <span className="flex-1 text-sm text-emerald-400 font-medium flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse inline-block" />
+            Live call
+          </span>
+        )}
 
-          {/* Mode toggle — compact pills */}
-          <div className="flex gap-1 bg-neutral-900 rounded-lg p-1 shrink-0">
-            <button
-              onClick={() => setMode('tts')}
-              className={`py-1.5 px-3 rounded-md text-xs font-medium transition-all ${mode === 'tts' ? 'bg-white text-black' : 'text-neutral-400'}`}
-            >TTS</button>
-            {/* <button
+        {/* Mode toggle — compact pills */}
+        <div className=" bg-neutral-900 rounded-lg p-1 shrink-0">
+          {/* <div className="flex gap-1 bg-neutral-900 rounded-lg p-1 shrink-0"> */}
+          <button
+            onClick={() => setMode('tts')}
+            className={`py-1.5 px-3 rounded-md text-xs font-medium transition-all ${mode === 'tts' ? 'bg-white text-black' : 'text-neutral-400'}`}
+          >TTS</button>
+          {/* <button
               onClick={() => setMode('agent')}
               className={`py-1.5 px-3 rounded-md text-xs font-medium transition-all ${mode === 'agent' ? 'bg-blue-600 text-white' : 'text-neutral-400'}`}
             >Agent</button> */}
-          </div>
+        </div>
 
-          {/* Call button */}
-          <button
-            onClick={toggleCall}
-            disabled={isDialing || (!callActive && !phoneNumber)}
-            className={`shrink-0 flex items-center gap-1.5 py-2 px-3 rounded-xl text-sm font-medium transition-all disabled:opacity-40 ${
-              callActive ? 'bg-red-600 hover:bg-red-500' : 'bg-emerald-600 hover:bg-emerald-500'
+        {/* Call button */}
+        <button
+          onClick={toggleCall}
+          disabled={isDialing || (!callActive && !phoneNumber)}
+          className={`shrink-0 flex items-center gap-1.5 py-2 px-3 rounded-xl text-sm font-medium transition-all disabled:opacity-40 ${callActive ? 'bg-red-600 hover:bg-red-500' : 'bg-emerald-600 hover:bg-emerald-500'
             }`}
-          >
-            {isDialing ? <RefreshCw size={14} className="animate-spin" /> : <Phone size={14} />}
-            {isDialing ? 'Dialing' : callActive ? 'End' : 'Call'}
-          </button>
+        >
+          {isDialing ? <RefreshCw size={14} className="animate-spin" /> : <Phone size={14} />}
+          {isDialing ? 'Dialing' : callActive ? 'End' : 'Call'}
+        </button>
 
-          {/* Clear */}
+        {/* Clear & Download */}
+        <div className="flex gap-1 shrink-0">
           <button
             onClick={() => { setTranscript([]); setPartialTranscript(''); }}
-            className="shrink-0 p-2 border border-neutral-700 hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400"
+            className="p-2 border border-neutral-700 hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400"
             title="Clear transcript"
           >
             <RefreshCw size={14} />
           </button>
+          <button
+            onClick={downloadTranscript}
+            disabled={transcript.length === 0}
+            className="p-2 border border-neutral-700 hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400 disabled:opacity-50"
+            title="Download transcript"
+          >
+            <Download size={14} />
+          </button>
         </div>
+      </div>
       {/* Sidebar / Settings */}
 
       <div className="hidden md:flex w-full md:w-72 md:min-w-72 md:h-full border-r border-neutral-800 bg-neutral-900/50 p-6 flex-col gap-8">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-white mb-2 flex items-center gap-2">
-            <Mic className="text-blue-500" /> Voice Surrogate
+            <Mic className="text-blue-500" /> Phogent
           </h1>
           <p className="text-sm text-neutral-400">Manage your AI proxy calls in real-time.</p>
         </div>
 
-        <button
-          onClick={() => { setTranscript([]); setPartialTranscript(''); }}
-          className="flex items-center gap-2 justify-center py-2 px-4 border border-neutral-700 hover:bg-neutral-800 rounded-xl transition-colors text-sm font-medium text-neutral-300"
-        >
-          <RefreshCw className="w-4 h-4" /> Clear Transcript
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setTranscript([]); setPartialTranscript(''); }}
+            className="flex-1 flex items-center gap-2 justify-center py-2 px-4 border border-neutral-700 hover:bg-neutral-800 rounded-xl transition-colors text-sm font-medium text-neutral-300"
+          >
+            <RefreshCw className="w-4 h-4" /> Clear
+          </button>
+          <button
+            onClick={downloadTranscript}
+            disabled={transcript.length === 0}
+            className="flex-1 flex items-center gap-2 justify-center py-2 px-4 border border-neutral-700 hover:bg-neutral-800 rounded-xl transition-colors text-sm font-medium text-neutral-300 disabled:opacity-50"
+          >
+            <Download className="w-4 h-4" /> Download
+          </button>
+        </div>
 
         <div className="space-y-4">
           <h2 className="text-sm font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
