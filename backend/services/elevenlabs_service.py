@@ -41,7 +41,7 @@ class ElevenLabsService:
 
         # Yelling: low stability = more dramatic/intense, high style = expressive
         if is_yelling:
-            voice_settings = {"stability": 0.15, "similarity_boost": 0.9, "style": 0.85, "use_speaker_boost": True}
+            voice_settings = {"stability": 3, "similarity_boost": 0.33, "style": 0.99, "use_speaker_boost": True}
         else:
             voice_settings = {"stability": 0.5, "similarity_boost": 0.8}
 
