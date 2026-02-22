@@ -29,7 +29,10 @@ export default function Home() {
   };
 
   useEffect(() => {
-    scrollToBottom();
+    const timeout = setTimeout(() => {
+      scrollToBottom();
+    }, 100);
+    return () => clearTimeout(timeout);
   }, [transcript, partialTranscript, isBotPreparing]);
 
   useEffect(() => {
@@ -224,9 +227,9 @@ export default function Home() {
           </div>
         )}
 
-        <div className="flex-1 p-8 overflow-y-auto pt-24 pb-32 flex flex-col">
-          <div className="flex-1 flex flex-col justify-end min-h-full">
-            <div className="space-y-6 flex-shrink-0">
+        <div className="flex-1 p-8 overflow-y-auto pt-24 pb-32 flex flex-col relative">
+          <div className="flex-1 w-full mt-auto">
+            <div className="space-y-6">
               {transcript.length === 0 && !isBotPreparing && !partialTranscript && (
                 <div className="text-center text-neutral-600 flex flex-col items-center justify-center h-full gap-4 mt-32">
                   <RefreshCw className="w-8 h-8 opacity-20" />
@@ -276,7 +279,7 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              <div ref={bottomRef} className="h-4 w-full" />
+              <div ref={bottomRef} className="h-4 w-full mt-4" />
             </div>
           </div>
         </div>
