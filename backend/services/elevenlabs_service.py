@@ -27,7 +27,7 @@ class ElevenLabsService:
         self.voice_id = voice_id
         logger.debug("ElevenLabsService initialized with voice_id=%s", voice_id)
 
-    async def tts_stream_generator(self, text_iterator, output_queue: asyncio.Queue):
+    async def start_session(self, audio_callback, status_callback=None):
         """
         Connects to ElevenLabs TTS WebSocket, sends text from `text_iterator`,
         and puts returned audio chunks (base64 ulaw) into `output_queue`.

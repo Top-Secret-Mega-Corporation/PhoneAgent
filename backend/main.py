@@ -66,6 +66,12 @@ def get_base_url(request: Request):
     host = request.headers.get("host", request.url.hostname)
     return f"https://{host}"
 
+# ── HTTP Routes ──────────────────────────────────────────────────────────────
+
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "PhoneAgent Backend is running!"}
+
 @app.api_route("/twiml", methods=["GET", "POST"])
 async def twiml_bot(request: Request):
     base_url = get_base_url(request)
@@ -88,6 +94,144 @@ async def make_call(call_req: CallRequest, request: Request):
     except Exception as e:
         return Response(content=str(e), status_code=500)
 
+@app.get("/dev-session")
+async def get_dev_session():
+    """
+    Returns a signed ElevenLabs WebSocket URL for browser-direct dev mode.
+    The frontend uses this to connect to the agent without exposing the API key.
+    """
+    import urllib.request as _req
+    import os
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    agent_id = os.getenv("ELEVENLABS_AGENT_ID", "agent_8101kj0w0x2bfywt0ewvxypb4kqp")
+    url = f"https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id={agent_id}"
+    try:
+        request = _req.Request(url, headers={"xi-api-key": api_key})
+        with _req.urlopen(request, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            return {"signed_url": data["signed_url"]}
+    except Exception as e:
+        return Response(content=f"Failed to get signed URL: {e}", status_code=500)
+
+# ── Active ElevenLabs agent sessions, keyed by stream_sid ────────────────────
+
+active_sessions: dict[str, ElevenLabsService] = {}
+
+# ── Dev Mode WebSocket: browser mic ↔ ElevenLabs agent ───────────────────────
+
+@app.websocket("/dev-stream")
+async def dev_stream(websocket: WebSocket):
+    """
+    Dev Mode audio bridge:
+      - Browser sends PCM16 16kHz mic audio as binary frames
+      - Browser sends director text as JSON: {"type": "inject", "text": "..."}
+      - Agent audio is forwarded back to browser as binary frames (PCM16 16kHz)
+      - Transcripts are sent to browser as JSON: {"type": "transcript", "sender": ..., "text": ...}
+    """
+    await websocket.accept()
+    import os
+    import websockets as _ws
+
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    agent_id = os.getenv("ELEVENLABS_AGENT_ID", "agent_8101kj0w0x2bfywt0ewvxypb4kqp")
+    el_ws_url = f"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={agent_id}"
+
+    try:
+        async with _ws.connect(el_ws_url, additional_headers={"xi-api-key": api_key}) as el_ws:
+            print("[DevMode] ElevenLabs agent connected")
+
+            # Wait for ElevenLabs initiation metadata
+            raw = await el_ws.recv()
+            init_meta = json.loads(raw)
+            print(f"[DevMode] EL init: {init_meta.get('type')}")
+
+            # Send conversation config: request PCM 16kHz output (browser can play directly)
+            await el_ws.send(json.dumps({
+                "type": "conversation_initiation_client_data",
+                "conversation_config_override": {
+                    "agent": {},
+                    "tts": { "output_format": "pcm_16000" }
+                }
+            }))
+
+            # Notify browser that session is ready
+            await websocket.send_json({"type": "status", "status": "connected"})
+
+            async def receive_from_browser():
+                """Receive mic audio (binary) or inject text (JSON) from browser."""
+                try:
+                    while True:
+                        msg = await websocket.receive()
+                        if "bytes" in msg and msg["bytes"]:
+                            # Binary = PCM16 mic audio → forward to ElevenLabs
+                            import base64 as _b64
+                            b64 = _b64.b64encode(msg["bytes"]).decode()
+                            await el_ws.send(json.dumps({"user_audio_chunk": b64}))
+                        elif "text" in msg and msg["text"]:
+                            data = json.loads(msg["text"])
+                            if data.get("type") == "inject":
+                                # Director text: send as user_message so agent responds to it
+                                text = data.get("text", "").strip()
+                                if text:
+                                    await el_ws.send(json.dumps({
+                                        "type": "user_message",
+                                        "user_message_event": {"user_message": f"DIRECTOR: {text}"}
+                                    }))
+                except (WebSocketDisconnect, _ws.exceptions.ConnectionClosed):
+                    pass
+
+            async def receive_from_elevenlabs():
+                """Receive audio/transcripts from ElevenLabs and forward to browser."""
+                try:
+                    async for raw_msg in el_ws:
+                        msg = json.loads(raw_msg)
+                        msg_type = msg.get("type")
+
+                        if msg_type == "audio":
+                            # Forward raw PCM16 audio to browser as binary
+                            import base64 as _b64
+                            b64 = msg.get("audio_event", {}).get("audio_base_64", "")
+                            if b64:
+                                pcm_bytes = _b64.b64decode(b64)
+                                await websocket.send_bytes(pcm_bytes)
+
+                        elif msg_type == "agent_response":
+                            text = msg.get("agent_response_event", {}).get("agent_response", "")
+                            if text:
+                                await websocket.send_json({
+                                    "type": "transcript", "sender": "bot", "text": text
+                                })
+
+                        elif msg_type == "user_transcript":
+                            text = msg.get("user_transcription_event", {}).get("user_transcript", "")
+                            if text:
+                                await websocket.send_json({
+                                    "type": "transcript", "sender": "caller", "text": text
+                                })
+
+                        elif msg_type == "interruption":
+                            await websocket.send_json({"type": "status", "status": "interrupted"})
+
+                        elif msg_type == "ping":
+                            await el_ws.send(json.dumps({
+                                "type": "pong",
+                                "event_id": msg.get("ping_event", {}).get("event_id")
+                            }))
+
+                except (_ws.exceptions.ConnectionClosed, WebSocketDisconnect):
+                    pass
+
+            # Run both loops concurrently
+            await asyncio.gather(receive_from_browser(), receive_from_elevenlabs())
+
+    except Exception as e:
+        print(f"[DevMode] Error: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+
+# ── UI WebSocket (frontend → backend control channel) ────────────────────────
 
 @app.websocket("/ui-stream")
 async def ui_stream(websocket: WebSocket):
@@ -140,6 +284,17 @@ async def ui_stream(websocket: WebSocket):
         print(">>> UI STREAM disconnected", flush=True)
         manager.disconnect_ui(websocket)
 
+            if action == "direct_tts" and session:
+                # Inject user text directly into the active agent session.
+                # The agent will speak this text in its configured voice.
+                print(f"[UI] Injecting text into agent: {text}")
+                await session.inject_text(text)
+                # Echo to UI transcript
+                await manager.broadcast_ui({
+                    "type": "transcript",
+                    "sender": "caller",
+                    "text": f"[You typed]: {text}"
+                })
 
 async def process_and_stream_audio(text: str, broadcast_transcript: bool = True):
     """Takes a text string, streams TTS audio to Twilio."""
@@ -160,7 +315,14 @@ async def process_and_stream_audio(text: str, broadcast_transcript: bool = True)
             chunk_count += 1
             await manager.send_audio_to_twilio(stream_sid, chunk)
 
-    twilio_sender = asyncio.create_task(send_audio_to_twilio_task())
+            elif action == "standard":
+                # Standard mode – caller uses their own voice, no AI processing.
+                # Nothing to inject; just acknowledge in the UI transcript.
+                await manager.broadcast_ui({
+                    "type": "transcript",
+                    "sender": "caller",
+                    "text": f"[Standard mode]: {text}"
+                })
 
     async def text_iterator():
         yield text
@@ -180,6 +342,7 @@ async def process_and_stream_audio(text: str, broadcast_transcript: bool = True)
             "timestamp": datetime.utcnow()
         })
 
+# ── Twilio Media Stream WebSocket ─────────────────────────────────────────────
 
 @app.websocket("/media-stream")
 async def media_stream(websocket: WebSocket):
@@ -250,11 +413,25 @@ async def media_stream(websocket: WebSocket):
                         {"call_id": stream_sid},
                         {"$set": {"status": "completed", "end_time": datetime.utcnow()}}
                     )
-                await stt_queue.put(None)
+                    active_sessions[stream_sid] = el_session
+                    print(f"[ElevenLabs] Agent session started for stream {stream_sid}")
+                except Exception as el_err:
+                    print(f"[ElevenLabs] ERROR: Failed to start session: {el_err}")
+                    await manager.broadcast_ui({"type": "status", "status": "agent_error"})
+
+            elif event == "media":
+                # Forward caller's audio to the ElevenLabs agent in real-time
+                if el_session:
+                    payload = msg["media"]["payload"]
+                    await el_session.send_audio(payload)
+
+            elif event == "stop":
+                print(f"[Twilio] Stream stopped: {stream_sid}")
                 break
 
     except WebSocketDisconnect:
         print(">>> MEDIA STREAM WebSocketDisconnect", flush=True)
         if stream_sid:
+            active_sessions.pop(stream_sid, None)
             manager.disconnect_twilio(stream_sid)
         await stt_queue.put(None)
