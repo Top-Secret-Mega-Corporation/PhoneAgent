@@ -237,6 +237,30 @@ async def media_stream(websocket: WebSocket):
                 stt_task.add_done_callback(stt_task_done)
                 print(">>> STT task started", flush=True)
 
+                # Automatically trigger the welcome message
+                async def send_welcome():
+                    await asyncio.sleep(0.5)  # slight delay to let audio connections settle
+                    welcome_text = "Hello, I am an AI agent. A caller is monitoring this live, and might take a few seconds to respond."
+                    print(">>> Triggering auto welcome message", flush=True)
+                    # Use existing machinery to process the text
+                    global current_generation_task
+                    if current_generation_task and not current_generation_task.done():
+                        current_generation_task.cancel()
+                        if manager.current_stream_sid:
+                            await manager.clear_twilio_buffer(manager.current_stream_sid)
+
+                    async def direct_tts_flow():
+                        try:
+                            await manager.broadcast_ui({"type": "status", "status": "bot_preparing"})
+                            await process_and_stream_audio(welcome_text, broadcast_transcript=False)
+                        except asyncio.CancelledError:
+                            print(">>> direct_tts_flow (welcome) cancelled", flush=True)
+
+                    current_generation_task = asyncio.create_task(direct_tts_flow())
+                    await manager.broadcast_ui({"type": "transcript", "sender": "bot", "text": welcome_text})
+
+                asyncio.create_task(send_welcome())
+
             elif event == "media":
                 payload = msg["media"]["payload"]
                 print(f">>> MEDIA CHUNK len={len(payload)}", flush=True)

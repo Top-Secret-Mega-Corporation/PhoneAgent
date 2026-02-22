@@ -138,12 +138,6 @@ export default function Home() {
           if (data.status === 'call_started') {
             setCallActive(true);
             setIsDialing(false);
-
-            // Automatically send the welcome message
-            ws.current?.send(JSON.stringify({
-              action: 'direct_tts',
-              text: "Hello, I am an AI agent. A caller is monitoring this live, and might take a few seconds to respond."
-            }));
           }
           if (data.status === 'call_ended') {
             setCallActive(false);
@@ -302,14 +296,14 @@ export default function Home() {
           <h2 className="text-sm font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
             <Settings className="w-4 h-4" /> Operating Mode
           </h2>
-               <div className="bg-neutral-900 p-1 rounded-xl border border-neutral-800 inline-flex">
+          <div className="bg-neutral-900 p-1 rounded-xl border border-neutral-800 inline-flex">
             <button
               onClick={() => setMode('tts')}
               className="py-2 px-4 rounded-lg text-sm font-medium bg-white text-black shadow-sm"
             >
               Direct TTS
             </button>
-            
+
             {/* <button
               onClick={() => setMode('agent')}
               className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${mode === 'agent' ? 'bg-blue-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
