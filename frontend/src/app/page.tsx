@@ -207,7 +207,7 @@ export default function Home() {
   return (
     <div className="flex flex-col md:flex-row h-screen bg-neutral-950 text-neutral-100 font-sans">
       {/* Mobile Menu */}
-      <div className="flex fixed z-50 top-0 w-full md:hidden items-center justify-center gap-3 px-4 py-3 bg-neutral-800/50 rounded-b-md">
+      <div className="flex fixed z-50 top-0 w-full md:hidden items-center justify-center gap-3 px-4 py-3 bg-neutral-800/80 rounded-b-md backdrop-blur-md shadow-sm">
         {/* Phone number input */}
         {!callActive && (
           <div className="flex-1 w-2xl min-w-0 flex items-center bg-neutral-900 border border-neutral-700 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-blue-500/50">
