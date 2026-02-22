@@ -221,11 +221,10 @@ export default function Home() {
         )}
 
         {/* Mode toggle — compact pills */}
-        <div className=" bg-neutral-900 rounded-lg p-1 shrink-0">
-          {/* <div className="flex gap-1 bg-neutral-900 rounded-lg p-1 shrink-0"> */}
+        <div className="bg-neutral-900 rounded-lg p-1 shrink-0 inline-flex">
           <button
             onClick={() => setMode('tts')}
-            className={`py-1.5 px-3 rounded-md text-xs font-medium transition-all ${mode === 'tts' ? 'bg-white text-black' : 'text-neutral-400'}`}
+            className="py-1.5 px-3 rounded-md text-xs font-medium bg-white text-black"
           >TTS</button>
           {/* <button
               onClick={() => setMode('agent')}
@@ -293,10 +292,10 @@ export default function Home() {
           <h2 className="text-sm font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2">
             <Settings className="w-4 h-4" /> Operating Mode
           </h2>
-          <div className="grid grid-cols-2 gap-2 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
+          <div className="bg-neutral-900 p-1 rounded-xl border border-neutral-800 inline-flex">
             <button
               onClick={() => setMode('tts')}
-              className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${mode === 'tts' ? 'bg-white text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+              className="py-2 px-4 rounded-lg text-sm font-medium bg-white text-black shadow-sm"
             >
               Direct TTS
             </button>
