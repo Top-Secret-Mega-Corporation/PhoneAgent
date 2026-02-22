@@ -21,4 +21,5 @@ jobs:
             
             # Restart docker-compose stack
             docker compose down
+            docker builder prune -f
             docker compose up -d --build --force-recreate
