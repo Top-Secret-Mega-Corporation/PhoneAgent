@@ -42,7 +42,7 @@ export default function Home() {
 
       // Use env variable if provided, fallback to relative path on same host
       const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-        ? `${process.env.NEXT_PUBLIC_WS_URL}/ui-stream`
+        ? `wss://phone-agent-api.lucaswebber.dev/ui-stream`
         : (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `${defaultWsBase}/ui-stream`);
 
       ws.current = new WebSocket(wsUrl);
@@ -97,7 +97,7 @@ export default function Home() {
   };
 
   const toggleCall = async () => {
-    const apiUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
+    const apiUrl = "https://phone-agent-api.lucaswebber.dev" || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
     console.log(apiUrl);
 
     if (callActive) {
