@@ -9,11 +9,19 @@ class ConnectionManager:
         # current active twilio streamsid and callsid (assuming one active call for simplicity)
         self.current_stream_sid: str | None = None
         self.current_call_sid: str | None = None
+        self.current_transcript: list[dict] = []
 
     async def connect_ui(self, websocket: WebSocket):
         await websocket.accept()
         self.ui_websockets.append(websocket)
         print("UI WebSocket connected")
+        if self.current_stream_sid:
+            try:
+                await websocket.send_json({"type": "status", "status": "call_started"})
+                for msg in self.current_transcript:
+                    await websocket.send_json(msg)
+            except Exception as e:
+                print(f"Failed to send initial status to UI ws: {e}")
 
     def disconnect_ui(self, websocket: WebSocket):
         if websocket in self.ui_websockets:
@@ -24,6 +32,7 @@ class ConnectionManager:
         self.twilio_websockets[stream_sid] = websocket
         self.current_stream_sid = stream_sid
         self.current_call_sid = call_sid
+        self.current_transcript = []  # Reset transcript history for new call
         print(f"Twilio WebSocket connected: {stream_sid} for call: {call_sid}")
         # Notify UI that call started
         await self.broadcast_ui({"type": "status", "status": "call_started"})
@@ -39,6 +48,8 @@ class ConnectionManager:
         asyncio.create_task(self.broadcast_ui({"type": "status", "status": "call_ended"}))
 
     async def broadcast_ui(self, message: dict):
+        if message.get("type") == "transcript":
+            self.current_transcript.append(message)
         for connection in self.ui_websockets:
             try:
                 await connection.send_json(message)
