@@ -11,7 +11,7 @@ type Message = {
 };
 
 export default function Home() {
-  const [mode, setMode] = useState<'tts' | 'agent'>('tts');
+  const [mode, setMode] = useState<'tts' /* | 'agent' */>('tts');
   const [callActive, setCallActive] = useState(false);
   const [isDialing, setIsDialing] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -88,7 +88,7 @@ export default function Home() {
     if (!inputText.trim() || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
 
     ws.current.send(JSON.stringify({
-      action: mode === 'tts' ? 'direct_tts' : 'agent_prompt',
+      action: 'direct_tts', // mode === 'tts' ? 'direct_tts' : 'agent_prompt',
       text: inputText
     }));
 
@@ -159,10 +159,10 @@ export default function Home() {
               onClick={() => setMode('tts')}
               className={`py-1.5 px-3 rounded-md text-xs font-medium transition-all ${mode === 'tts' ? 'bg-white text-black' : 'text-neutral-400'}`}
             >TTS</button>
-            <button
+            {/* <button
               onClick={() => setMode('agent')}
               className={`py-1.5 px-3 rounded-md text-xs font-medium transition-all ${mode === 'agent' ? 'bg-blue-600 text-white' : 'text-neutral-400'}`}
-            >Agent</button>
+            >Agent</button> */}
           </div>
 
           {/* Call button */}
@@ -214,17 +214,17 @@ export default function Home() {
             >
               Direct TTS
             </button>
-            <button
+            {/* <button
               onClick={() => setMode('agent')}
               className={`py-2 px-3 rounded-lg text-sm font-medium transition-all ${mode === 'agent' ? 'bg-blue-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
             >
               Agent Mode
-            </button>
+            </button> */}
           </div>
           <p className="text-xs text-neutral-500 mt-2 min-h-[40px]">
-            {mode === 'tts'
-              ? "The AI speaks exactly what you type. Includes real-time spellcheck."
-              : "Act as a director. Type prompts mid-call, and the AI generates full conversational responses."}
+            {/* mode === 'tts'
+              ? */ "The AI speaks exactly what you type. Includes real-time spellcheck."
+              /* : "Act as a director. Type prompts mid-call, and the AI generates full conversational responses." */}
           </p>
         </div>
 
@@ -358,7 +358,7 @@ export default function Home() {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               disabled={!callActive}
-              placeholder={callActive ? (mode === 'tts' ? "Type to speak immediately (interrupts ongoing speech)..." : "Prompt the AI to respond...") : "Start a call to begin typing"}
+              placeholder={callActive ? "Type to speak immediately (interrupts ongoing speech)..." /* mode === 'tts' ? ... : "Prompt the AI to respond..." */ : "Start a call to begin typing"}
               className={`w-full bg-neutral-900 border ${callActive ? 'border-neutral-700 focus:border-blue-500 focus:ring-blue-500/50' : 'border-neutral-800 opacity-50 cursor-not-allowed'} text-white placeholder-neutral-500 rounded-2xl py-4 pl-6 pr-16 focus:outline-none focus:ring-2 transition-all shadow-2xl`}
             />
             <button
