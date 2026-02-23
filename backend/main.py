@@ -1,6 +1,13 @@
 import json
 import asyncio
 import urllib.request
+import base64
+import miniaudio
+try:
+    import audioop
+except ImportError:
+    import audioop_lts as audioop
+import os
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, Request, Response, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +31,28 @@ app.add_middleware(
 elevenlabs = ElevenLabsService()
 
 current_generation_task = None
+
+# --- Typing Indicator Init ---
+TYPING_INDICATOR_AUDIO_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Typing Indicator Blips.mp3")
+TYPING_AUDIO_CHUNKS = []
+typing_indicator_task = None
+
+print(f">>> Loading typing indicator audio from: {TYPING_INDICATOR_AUDIO_PATH}", flush=True)
+try:
+    if os.path.exists(TYPING_INDICATOR_AUDIO_PATH):
+        decoded = miniaudio.decode_file(TYPING_INDICATOR_AUDIO_PATH, sample_rate=8000, nchannels=1, output_format=miniaudio.SampleFormat.SIGNED16)
+        # Convert 16-bit PCM to 8-bit ulaw
+        ulaw_data = audioop.lin2ulaw(decoded.samples, 2)
+        chunk_size = 160 # 160 bytes = 20ms of 8kHz ulaw
+        for i in range(0, len(ulaw_data), chunk_size):
+            chunk = ulaw_data[i:i+chunk_size]
+            TYPING_AUDIO_CHUNKS.append(base64.b64encode(chunk).decode("ascii"))
+        print(f">>> Successfully loaded {len(TYPING_AUDIO_CHUNKS)} typing indicator chunks.")
+    else:
+        print(f">>> WARNING: Typing indicator file not found at {TYPING_INDICATOR_AUDIO_PATH}")
+except Exception as e:
+    print(f">>> Failed to load typing indicator mp3: {e}")
+# -----------------------------
 
 # @app.on_event("startup")
 # async def startup_db_client():
@@ -98,6 +127,31 @@ async def ui_stream(websocket: WebSocket):
             msg = json.loads(data)
             action = msg.get("action")
             text = msg.get("text")
+            
+            global typing_indicator_task
+
+            if action == "typing":
+                print(">>> Received typing event from UI", flush=True)
+                if manager.current_stream_sid and TYPING_AUDIO_CHUNKS and (typing_indicator_task is None or typing_indicator_task.done()):
+                    async def play_typing_audio():
+                        print(">>> Starting typing audio task", flush=True)
+                        try:
+                            # Play the sound effect once, then pause, then repeat
+                            while True:
+                                for chunk in TYPING_AUDIO_CHUNKS:
+                                    await manager.send_audio_to_twilio(manager.current_stream_sid, chunk)
+                                    await asyncio.sleep(0.02)
+                                await asyncio.sleep(1.0) # wait before playing again
+                        except asyncio.CancelledError:
+                            print(">>> Typing audio task cancelled", flush=True)
+                    typing_indicator_task = asyncio.create_task(play_typing_audio())
+                continue
+            elif action == "typing_stopped":
+                print(">>> Received typing_stopped event from UI", flush=True)
+                if typing_indicator_task and not typing_indicator_task.done():
+                    typing_indicator_task.cancel()
+                    typing_indicator_task = None
+                continue
 
             if not text:
                 continue
@@ -119,6 +173,10 @@ async def ui_stream(websocket: WebSocket):
                 #     })
 
             global current_generation_task
+            if typing_indicator_task and not typing_indicator_task.done():
+                typing_indicator_task.cancel()
+                typing_indicator_task = None
+
             if current_generation_task and not current_generation_task.done():
                 print(">>> Cancelling existing generation task", flush=True)
                 current_generation_task.cancel()

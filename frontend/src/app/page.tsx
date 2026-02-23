@@ -50,6 +50,7 @@ export default function Home() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const audioStreamActiveRef = useRef(audioStreamActive);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     audioStreamActiveRef.current = audioStreamActive;
@@ -95,9 +96,8 @@ export default function Home() {
       const defaultWsBase = isSecure ? `wss://${window.location.host}` : `ws://${window.location.host}`;
 
       // Use env variable if provided, fallback to relative path on same host
-      const wsUrl = `wss://phone-agent-api.lucaswebber.dev/ui-stream`
-      // ? process.env.NEXT_PUBLIC_WS_URL
-      // : (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `${defaultWsBase}/ui-stream`);
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL
+        || (process.env.NODE_ENV === 'development' ? 'ws://localhost:8000/ui-stream' : `wss://phone-agent-api.lucaswebber.dev/ui-stream`);
 
       ws.current = new WebSocket(wsUrl);
 
@@ -165,11 +165,33 @@ export default function Home() {
 
     setInputText('');
     setIsBotPreparing(true);
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+  };
+
+  const handleTypingChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputText(e.target.value);
+
+    if (callActive && ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ action: 'typing' }));
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+          ws.current.send(JSON.stringify({ action: 'typing_stopped' }));
+        }
+      }, 1500);
+    }
   };
 
   const toggleCall = async () => {
-    const apiUrl = "https://phone-agent-api.lucaswebber.dev"
-    // || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL
+      || (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : 'https://phone-agent-api.lucaswebber.dev');
     console.log(apiUrl);
 
     if (callActive) {
@@ -371,19 +393,19 @@ export default function Home() {
       <div className="flex-1 flex flex-col relative mt-15 md:mt-0">
 
         <div className="flex-1 overflow-y-auto pb-32 flex flex-col relative">
-             {callActive && (
-          <div className="sticky bg-blue-600/10 border-b border-blue-500/20 text-blue-400 py-3 px-6 flex justify-between items-center z-10 backdrop-blur-md shadow-sm">
-            <div className="flex items-center gap-3">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
-              </span>
-              <span className="text-sm font-medium">You are live on a call</span>
-            </div>
+          {callActive && (
+            <div className="sticky bg-blue-600/10 border-b border-blue-500/20 text-blue-400 py-3 px-6 flex justify-between items-center z-10 backdrop-blur-md shadow-sm">
+              <div className="flex items-center gap-3">
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                </span>
+                <span className="text-sm font-medium">You are live on a call</span>
+              </div>
 
-            <div className="flex items-center gap-4 z-50">
-              {/* Accessibility Toggle */}
-              {/* <button
+              <div className="flex items-center gap-4 z-50">
+                {/* Accessibility Toggle */}
+                {/* <button
                 onClick={() => setAccessibilityMode(!accessibilityMode)}
                 className={`text-sm font-medium flex items-center gap-2 px-3 py-1.5 rounded-full border transition-colors ${accessibilityMode ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-neutral-800/50 text-neutral-400 border-neutral-700/50 hover:text-white'
                   }`}
@@ -393,18 +415,18 @@ export default function Home() {
                 <span className="hidden sm:inline">A11y Mode</span>
               </button> */}
 
-              {/* Audio Playback Toggle */}
-              <button
-                onClick={() => setAudioStreamActive(!audioStreamActive)}
-                className={`text-sm font-medium flex items-center gap-2 px-3 py-1.5 rounded-full border transition-colors ${audioStreamActive ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-blue-500/10 hover:bg-blue-500/20 hover:text-blue-300 border-blue-500/20'
-                  }`}
-              >
-                {audioStreamActive ? <Volume2 className="w-4 h-4" /> : <Ear className="w-4 h-4" />}
-                <span className="hidden sm:inline">{audioStreamActive ? "Mute Feed" : "Listen to Audio Feed"}</span>
-              </button>
+                {/* Audio Playback Toggle */}
+                <button
+                  onClick={() => setAudioStreamActive(!audioStreamActive)}
+                  className={`text-sm font-medium flex items-center gap-2 px-3 py-1.5 rounded-full border transition-colors ${audioStreamActive ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-blue-500/10 hover:bg-blue-500/20 hover:text-blue-300 border-blue-500/20'
+                    }`}
+                >
+                  {audioStreamActive ? <Volume2 className="w-4 h-4" /> : <Ear className="w-4 h-4" />}
+                  <span className="hidden sm:inline">{audioStreamActive ? "Mute Feed" : "Listen to Audio Feed"}</span>
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
           <div className="flex-1  pt-24 w-full mt-auto">
             <div className="space-y-6">
               {transcript.length === 0 && !isBotPreparing && !partialTranscript && (
@@ -472,7 +494,7 @@ export default function Home() {
             <input
               type="text"
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={handleTypingChange}
               disabled={!callActive}
               placeholder={callActive ? "Type to speak immediately (interrupts ongoing speech)..." /* mode === 'tts' ? ... : "Prompt the AI to respond..." */ : "Start a call to begin typing"}
               className={`w-full bg-neutral-700 border ${callActive ? 'border-neutral-700 focus:border-blue-500 focus:ring-blue-500/50' : 'border-neutral-800 opacity-50 cursor-not-allowed'} text-white placeholder-neutral-100 rounded-2xl py-4 pl-6 pr-16 focus:outline-none focus:ring-2 transition-all shadow-2xl`}

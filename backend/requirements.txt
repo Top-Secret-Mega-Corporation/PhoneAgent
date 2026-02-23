@@ -6,3 +6,5 @@ motor
 google-generativeai
 elevenlabs
 python-dotenv
+miniaudio
+audioop-lts
