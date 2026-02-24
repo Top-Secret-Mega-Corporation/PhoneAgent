@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Search, Settings, Phone, MessageSquare, Play, RefreshCw, Accessibility, Volume2, Ear, Download } from 'lucide-react';
+import { Mic, Search, Settings, Phone, MessageSquare, Play, RefreshCw, Accessibility, Volume2, Ear, Download, Clock, X } from 'lucide-react';
 import { authClient } from "../lib/auth-client"
 
 const { data: session, error } = await authClient.getSession()
@@ -34,6 +34,18 @@ type Message = {
   timestamp: string;
 };
 
+type ConversationSession = {
+  id: string;
+  phoneNumber: string;
+  date: string;
+  messages: Message[];
+};
+
+type RecentNumber = {
+  number: string;
+  lastCalled: string;
+};
+
 export default function Home() {
   const [mode, setMode] = useState<'tts' /* | 'agent' */>('tts');
   const [callActive, setCallActive] = useState(false);
@@ -48,6 +60,15 @@ export default function Home() {
   const [inputText, setInputText] = useState('');
   const ws = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const [conversationHistory, setConversationHistory] = useState<ConversationSession[]>([]);
+  const [recentNumbers, setRecentNumbers] = useState<RecentNumber[]>([]);
+  const [historyTab, setHistoryTab] = useState<'conversations' | 'numbers'>('conversations');
+  const [showHistory, setShowHistory] = useState(false);
+
+  const transcriptRef = useRef<Message[]>([]);
+  const phoneDataRef = useRef({ countryCode: '+1', phoneNumber: '' });
+  const sessionSavedRef = useRef(false);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
@@ -91,6 +112,62 @@ export default function Home() {
     }, 100);
     return () => clearTimeout(timeout);
   }, [transcript, partialTranscript, isBotPreparing]);
+
+  // Sync refs for WebSocket access
+  useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
+  useEffect(() => { phoneDataRef.current = { countryCode, phoneNumber }; }, [countryCode, phoneNumber]);
+
+  // Load history from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const h = JSON.parse(localStorage.getItem('phogent_history') || '[]');
+        const n = JSON.parse(localStorage.getItem('phogent_numbers') || '[]');
+        setConversationHistory(h);
+        setRecentNumbers(n);
+      } catch (e) { console.error('Failed to load history', e); }
+    }
+  }, []);
+
+  // Helper: persist and update conversation history
+  const updateHistory = (updater: (prev: ConversationSession[]) => ConversationSession[]) => {
+    setConversationHistory(prev => {
+      const next = updater(prev);
+      try { localStorage.setItem('phogent_history', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  // Helper: persist and update recent numbers
+  const updateNumbers = (updater: (prev: RecentNumber[]) => RecentNumber[]) => {
+    setRecentNumbers(prev => {
+      const next = updater(prev);
+      try { localStorage.setItem('phogent_numbers', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  // Save current conversation session to history
+  const saveCurrentSession = () => {
+    const msgs = transcriptRef.current;
+    if (msgs.length === 0 || sessionSavedRef.current) return;
+    sessionSavedRef.current = true;
+    const { countryCode: cc, phoneNumber: pn } = phoneDataRef.current;
+    updateHistory(prev => [{
+      id: Date.now().toString(),
+      phoneNumber: `${cc}${pn}`,
+      date: new Date().toISOString(),
+      messages: [...msgs],
+    }, ...prev].slice(0, 50));
+  };
+
+  // Add a phone number to recent list
+  const addRecentNumber = (number: string) => {
+    updateNumbers(prev => {
+      const filtered = prev.filter(n => n.number !== number);
+      return [{ number, lastCalled: new Date().toISOString() }, ...filtered].slice(0, 20);
+    });
+  };
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -143,6 +220,7 @@ export default function Home() {
             setIsDialing(false);
           }
           if (data.status === 'call_ended') {
+            saveCurrentSession();
             setCallActive(false);
             setIsDialing(false);
           }
@@ -210,9 +288,12 @@ export default function Home() {
       } catch (err) {
         console.error("Hangup fetch failed", err);
       }
+      saveCurrentSession();
       setCallActive(false);
     } else {
       if (!phoneNumber) return;
+      sessionSavedRef.current = false;
+      addRecentNumber(`${countryCode}${phoneNumber}`);
       setIsDialing(true);
       try {
         const res = await fetch(`${apiUrl}/call`, {
@@ -307,8 +388,104 @@ export default function Home() {
           >
             <Download size={14} />
           </button>
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className="p-2 border border-neutral-700 hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400"
+            title="History"
+          >
+            <Clock size={14} />
+          </button>
         </div>
       </div>
+
+      {/* Mobile History Drawer */}
+      {showHistory && (
+        <div className="fixed inset-0 z-40 bg-black/60 md:hidden" onClick={() => setShowHistory(false)}>
+          <div className="absolute left-0 top-0 bottom-0 w-72 bg-neutral-900 border-r border-neutral-800 p-5 flex flex-col gap-4 overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-neutral-400 uppercase tracking-wider flex items-center gap-2">
+                <Clock className="w-4 h-4" /> History
+              </h2>
+              <button onClick={() => setShowHistory(false)} className="text-neutral-500 hover:text-white p-1">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="bg-neutral-800 p-1 rounded-xl inline-flex">
+              <button
+                onClick={() => setHistoryTab('conversations')}
+                className={`py-1.5 px-3 rounded-lg text-xs font-medium transition-all ${historyTab === 'conversations' ? 'bg-white text-black shadow-sm' : 'text-neutral-400'}`}
+              >
+                Chats
+              </button>
+              <button
+                onClick={() => setHistoryTab('numbers')}
+                className={`py-1.5 px-3 rounded-lg text-xs font-medium transition-all ${historyTab === 'numbers' ? 'bg-white text-black shadow-sm' : 'text-neutral-400'}`}
+              >
+                Numbers
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {historyTab === 'conversations' ? (
+                conversationHistory.length === 0 ? (
+                  <p className="text-xs text-neutral-500 text-center py-4">No conversations yet</p>
+                ) : (
+                  conversationHistory.map((s) => (
+                    <div key={s.id} className="group relative">
+                      <button
+                        onClick={() => { setTranscript(s.messages); setPartialTranscript(''); setShowHistory(false); }}
+                        className="w-full text-left p-3 bg-neutral-800/50 hover:bg-neutral-800 border border-neutral-700/50 rounded-xl transition-colors"
+                      >
+                        <div className="text-sm font-medium text-neutral-200 truncate">{s.phoneNumber}</div>
+                        <div className="text-[11px] text-neutral-500 mt-1">
+                          {new Date(s.date).toLocaleDateString()} &middot; {s.messages.length} msgs
+                        </div>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); updateHistory(prev => prev.filter(x => x.id !== s.id)); }}
+                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 transition-all p-1"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))
+                )
+              ) : (
+                recentNumbers.length === 0 ? (
+                  <p className="text-xs text-neutral-500 text-center py-4">No recent numbers</p>
+                ) : (
+                  recentNumbers.map((item) => (
+                    <div key={item.number} className="group relative">
+                      <button
+                        onClick={() => {
+                          const num = item.number;
+                          if (num.startsWith('+44')) { setCountryCode('+44'); setPhoneNumber(num.slice(3)); }
+                          else if (num.startsWith('+61')) { setCountryCode('+61'); setPhoneNumber(num.slice(3)); }
+                          else { setCountryCode('+1'); setPhoneNumber(num.replace(/^\+1/, '')); }
+                          setShowHistory(false);
+                        }}
+                        className="w-full text-left p-3 bg-neutral-800/50 hover:bg-neutral-800 border border-neutral-700/50 rounded-xl transition-colors flex items-center gap-3"
+                      >
+                        <Phone className="w-4 h-4 text-blue-400 shrink-0" />
+                        <div>
+                          <div className="text-sm font-medium text-neutral-200">{item.number}</div>
+                          <div className="text-[11px] text-neutral-500">{new Date(item.lastCalled).toLocaleDateString()}</div>
+                        </div>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); updateNumbers(prev => prev.filter(n => n.number !== item.number)); }}
+                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 transition-all p-1"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))
+                )
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar / Settings */}
 
       <div className="hidden md:flex w-full md:w-72 md:min-w-72 md:h-full border-r border-neutral-800 bg-neutral-800/50 p-6 flex-col gap-8">
@@ -360,6 +537,86 @@ export default function Home() {
               ? */ "The AI speaks exactly what you type. Includes real-time spellcheck."
               /* : "Act as a director. Type prompts mid-call, and the AI generates full conversational responses." */}
           </p>
+        </div>
+
+        {/* History Section */}
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <h2 className="text-sm font-medium text-neutral-500 uppercase tracking-wider flex items-center gap-2 mb-3">
+            <Clock className="w-4 h-4" /> History
+          </h2>
+          <div className="bg-neutral-900 p-1 rounded-xl border border-neutral-800 inline-flex mb-3">
+            <button
+              onClick={() => setHistoryTab('conversations')}
+              className={`py-1.5 px-3 rounded-lg text-xs font-medium transition-all ${historyTab === 'conversations' ? 'bg-white text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+            >
+              Chats
+            </button>
+            <button
+              onClick={() => setHistoryTab('numbers')}
+              className={`py-1.5 px-3 rounded-lg text-xs font-medium transition-all ${historyTab === 'numbers' ? 'bg-white text-black shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+            >
+              Numbers
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            {historyTab === 'conversations' ? (
+              conversationHistory.length === 0 ? (
+                <p className="text-xs text-neutral-500 text-center py-4">No conversations yet</p>
+              ) : (
+                conversationHistory.map((s) => (
+                  <div key={s.id} className="group relative">
+                    <button
+                      onClick={() => { setTranscript(s.messages); setPartialTranscript(''); }}
+                      className="w-full text-left p-3 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-xl transition-colors"
+                    >
+                      <div className="text-sm font-medium text-neutral-200 truncate">{s.phoneNumber}</div>
+                      <div className="text-[11px] text-neutral-500 mt-1">
+                        {new Date(s.date).toLocaleDateString()} &middot; {s.messages.length} msgs
+                      </div>
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); updateHistory(prev => prev.filter(x => x.id !== s.id)); }}
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 transition-all p-1 rounded"
+                      title="Delete"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))
+              )
+            ) : (
+              recentNumbers.length === 0 ? (
+                <p className="text-xs text-neutral-500 text-center py-4">No recent numbers</p>
+              ) : (
+                recentNumbers.map((item) => (
+                  <div key={item.number} className="group relative">
+                    <button
+                      onClick={() => {
+                        const num = item.number;
+                        if (num.startsWith('+44')) { setCountryCode('+44'); setPhoneNumber(num.slice(3)); }
+                        else if (num.startsWith('+61')) { setCountryCode('+61'); setPhoneNumber(num.slice(3)); }
+                        else { setCountryCode('+1'); setPhoneNumber(num.replace(/^\+1/, '')); }
+                      }}
+                      className="w-full text-left p-3 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-xl transition-colors flex items-center gap-3"
+                    >
+                      <Phone className="w-4 h-4 text-blue-400 shrink-0" />
+                      <div>
+                        <div className="text-sm font-medium text-neutral-200">{item.number}</div>
+                        <div className="text-[11px] text-neutral-500">{new Date(item.lastCalled).toLocaleDateString()}</div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); updateNumbers(prev => prev.filter(n => n.number !== item.number)); }}
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 transition-all p-1 rounded"
+                      title="Delete"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))
+              )
+            )}
+          </div>
         </div>
 
         <div className="space-y-4 mt-auto">
