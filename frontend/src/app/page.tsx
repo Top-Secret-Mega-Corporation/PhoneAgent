@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Mic, Search, Settings, Phone, MessageSquare, Play, RefreshCw, Accessibility, Volume2, Ear, Download } from 'lucide-react';
+import { authClient } from "@/lib/auth-client"
 
+const { data: session, error } = await authClient.getSession()
 // Mu-law decoding table
 const muLawToLinear = new Int16Array(256);
 for (let i = 0; i < 256; i++) {
@@ -287,6 +289,7 @@ export default function Home() {
             <Mic className="text-blue-500" /> Phogent
           </h1>
           <p className="text-sm text-neutral-400">Manage your AI proxy calls in real-time.</p>
+          <h3 className='text-xl font-semibold tracking-tight text-white mb-2 flex items-center gap-2'>Hello, {session?.user.name}</h3>
         </div>
 
         <div className="flex gap-2">
