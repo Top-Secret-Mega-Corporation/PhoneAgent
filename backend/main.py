@@ -135,15 +135,16 @@ async def ui_stream(websocket: WebSocket):
                     async def play_typing_audio():
                         print(">>> Starting typing audio task", flush=True)
                         try:
-                            # Wait 2 seconds before playing to avoid triggering on very short messages
-                            await asyncio.sleep(2.0)
+                            # Wait 1 second before playing to avoid triggering on very short messages
+                            await asyncio.sleep(1.0)
                             
                             # Play the sound effect continuously by tracking time
                             # Send 100ms (800 bytes) chunks at exactly the rate of time passage
+                            # Play 50ms chunks
                             start_time = time.time()
                             elapsed_audio_time = 0.0
                             offset = 0
-                            chunk_size = 800  # 100ms at 8kHz ulaw
+                            chunk_size = 400  # 50ms at 8kHz ulaw
                             
                             while True:
                                 # Get next chunk seamlessly wrapping around
@@ -159,8 +160,8 @@ async def ui_stream(websocket: WebSocket):
                                 b64_chunk = base64.b64encode(chunk).decode("ascii")
                                 await manager.send_audio_to_twilio(manager.current_stream_sid, b64_chunk)
                                 
-                                # 100ms chunk
-                                elapsed_audio_time += 0.100 
+                                # 50ms chunk
+                                elapsed_audio_time += 0.050 
                                 
                                 # Sleep exactly enough to maintain a small 100ms buffer lead
                                 current_time = time.time()
@@ -214,8 +215,10 @@ async def ui_stream(websocket: WebSocket):
                     await manager.clear_twilio_buffer(manager.current_stream_sid)
 
             if action == "direct_tts":
+                print(f">>> RECEIVED direct_tts FOR TEXT: {text!r}", flush=True)
                 async def direct_tts_flow():
                     try:
+                        print(">>> direct_tts_flow started", flush=True)
                         await manager.broadcast_ui({"type": "status", "status": "bot_preparing"})
                         await process_and_stream_audio(text, broadcast_transcript=False)
                     except asyncio.CancelledError:
@@ -264,10 +267,13 @@ async def process_and_stream_audio(text: str, broadcast_transcript: bool = True)
     async def text_iterator():
         yield text
 
-    await elevenlabs.tts_stream_generator(text_iterator(), audio_queue, is_yelling=yelling)
-
-    await audio_queue.put(None)
-    await twilio_sender
+    try:
+        await elevenlabs.tts_stream_generator(text_iterator(), audio_queue, is_yelling=yelling)
+    except Exception as e:
+        print(f">>> TTS Generation crashed or cancelled: {e}", flush=True)
+    finally:
+        await audio_queue.put(None)
+        await twilio_sender
 
     print(f">>> TTS complete for: {text!r}", flush=True)
     if broadcast_transcript:

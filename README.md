@@ -21,10 +21,11 @@ Ensure you have the following installed on your machine:
 - **Ngrok** (`brew install ngrok/ngrok/ngrok` or direct binary download)
 
 ### Step 1: Environment Variables
-Create a `.env` file in the **root** of the `PhoneAgent` directory with the following API Keys:
+The application requires environment variables for both the frontend and backend.
 
+**Backend (`backend/.env`)**
 ```env
-MONGO_URI=mongodb://localhost:27017
+MONGODB_URI=mongodb+srv://...
 ELEVENLABS_API_KEY=your_elevenlabs_key
 GEMINI_API_KEY=your_gemini_key
 TWILIO_ACCOUNT_SID=your_twilio_sid
@@ -33,6 +34,14 @@ TWILIO_PHONE_NUMBER=+1234567890
 ```
 
 *Note: Your `TWILIO_PHONE_NUMBER` must be exactly formatted with the `+` sign and country code, and MUST be an active/verified number you own.*
+
+**Frontend (`frontend/.env.local`)**
+```env
+MONGODB_URI=mongodb+srv://...
+NEXT_PUBLIC_API_URL=http://localhost:8000
+BETTER_AUTH_URL=http://localhost:3000
+BETTER_AUTH_SECRET=your_secret_string
+```
 
 ### Step 2: Running the Python Backend
 The Python backend uses FastAPI to expose Webhooks and handle the WebSockets logic securely.
