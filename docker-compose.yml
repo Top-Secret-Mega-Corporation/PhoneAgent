@@ -24,6 +24,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
+    env_file: .env
     environment:
       - NEXT_PUBLIC_BACKEND_API_URL=https://phone-agent-api.lucaswebber.dev
       - NEXT_PUBLIC_WS_URL=wss://phone-agent-api.lucaswebber.dev
