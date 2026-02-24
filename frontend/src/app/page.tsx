@@ -160,17 +160,23 @@ export default function Home() {
     e.preventDefault();
     if (!inputText.trim() || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
 
-    ws.current.send(JSON.stringify({
-      action: 'direct_tts', // mode === 'tts' ? 'direct_tts' : 'agent_prompt',
-      text: inputText
-    }));
+    // Save text before clearing
+    const textToSend = inputText;
+
+    // Clear typing timeout and input BEFORE sending generation command
+    // to prevent race conditions with the server cancelling the generation
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    ws.current.send(JSON.stringify({ action: 'typing_stopped' }));
 
     setInputText('');
     setIsBotPreparing(true);
 
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
+    ws.current.send(JSON.stringify({
+      action: 'direct_tts',
+      text: textToSend
+    }));
   };
 
   const handleTypingChange = (e: React.ChangeEvent<HTMLInputElement>) => {
